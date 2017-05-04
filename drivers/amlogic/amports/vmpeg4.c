@@ -32,6 +32,7 @@
 #include <linux/amlogic/canvas/canvas.h>
 #include <linux/slab.h>
 #include <linux/amlogic/codec_mm/codec_mm.h>
+#include <linux/amlogic/codec_mm/configs.h>
 
 #include "vdec_reg.h"
 #include "vmpeg4.h"
@@ -1152,6 +1153,10 @@ static struct codec_profile_t amvdec_mpeg4_profile = {
 	.name = "mpeg4",
 	.profile = ""
 };
+static struct mconfig mpeg4_configs[] = {
+	MC_PU32("stat", &stat),
+};
+static struct mconfig_node mpeg4_node;
 
 static int __init amvdec_mpeg4_driver_init_module(void)
 {
@@ -1163,6 +1168,8 @@ static int __init amvdec_mpeg4_driver_init_module(void)
 		return -ENODEV;
 	}
 	vcodec_profile_register(&amvdec_mpeg4_profile);
+	INIT_REG_NODE_CONFIGS("media.decoder", &mpeg4_node,
+		"mpeg4", mpeg4_configs, CONFIG_FOR_R);
 	return 0;
 }
 
@@ -1174,10 +1181,6 @@ static void __exit amvdec_mpeg4_driver_remove_module(void)
 }
 
 /****************************************/
-
-module_param(stat, uint, 0664);
-MODULE_PARM_DESC(stat, "\n amvdec_mpeg4 stat\n");
-
 module_init(amvdec_mpeg4_driver_init_module);
 module_exit(amvdec_mpeg4_driver_remove_module);
 
