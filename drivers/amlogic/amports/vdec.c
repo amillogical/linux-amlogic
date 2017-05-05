@@ -1393,7 +1393,7 @@ void vdec_release(struct vdec_s *vdec)
 #ifdef CONFIG_AMLOGIC_IONVIDEO
 		ionvideo_release_map(vdec->vf_receiver_inst);
 		if (vdec->frame_base_video_path == FRAME_BASE_PATH_IONVIDEO
-				&& !vdec_dual(vdec)) {
+				&& vdec_frame_based(vdec)) {
 			ionvideo_release_map(vdec->vf_receiver_inst);
 		}
 #endif
