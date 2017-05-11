@@ -1208,6 +1208,7 @@ static int gxtv_demod_fe_resume(struct aml_fe_dev *dev)
 {
 	int memstart_dtmb;
 	pr_inf("gxtv_demod_fe_resume\n");
+	vdac_enable(1, 0x2);
 /*	demod_power_switch(PWR_ON);*/
 	Gxtv_Demod_Dtmb_Init(dev);
 	memstart_dtmb = dev->fe->dtv_demod->mem_start;
@@ -1222,6 +1223,7 @@ static int gxtv_demod_fe_suspend(struct aml_fe_dev *dev)
 {
 	pr_inf("gxtv_demod_fe_suspend\n");
 /*	demod_power_switch(PWR_OFF);*/
+	vdac_enable(0, 0x2);
 	return 0;
 }
 
