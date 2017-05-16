@@ -167,6 +167,8 @@ static struct vdec_info *gvs;
 u32 pts_hit, pts_missed, pts_i_hit, pts_i_missed;
 #endif
 
+static struct work_struct reset_work;
+
 static DEFINE_SPINLOCK(lock);
 
 static struct dec_sysinfo vmpeg4_amstream_dec_info;
@@ -651,6 +653,24 @@ static int vmpeg_vf_states(struct vframe_states *states, void *op_arg)
 	return 0;
 }
 
+static void reset_do_work(struct work_struct *work)
+{
+	unsigned long flags;
+
+	amvdec_stop();
+#ifndef CONFIG_POST_PROCESS_MANAGER
+	vf_light_unreg_provider(&vmpeg_vf_prov);
+#endif
+	spin_lock_irqsave(&lock, flags);
+	vmpeg4_local_init();
+	vmpeg4_prot_init();
+	spin_unlock_irqrestore(&lock, flags);
+#ifndef CONFIG_POST_PROCESS_MANAGER
+	vf_reg_provider(&vmpeg_vf_prov);
+#endif
+	amvdec_start();
+}
+
 static void vmpeg_put_timer_func(unsigned long arg)
 {
 	struct timer_list *timer = (struct timer_list *)arg;
@@ -675,20 +695,8 @@ static void vmpeg_put_timer_func(unsigned long arg)
 			frame_width, frame_height, fps);
 	}
 	if (READ_VREG(AV_SCRATCH_L)) {
-		unsigned long flags;
 		pr_info("mpeg4 fatal error happened,need reset    !!\n");
-		amvdec_stop();
-#ifndef CONFIG_POST_PROCESS_MANAGER
-		vf_light_unreg_provider(&vmpeg_vf_prov);
-#endif
-		spin_lock_irqsave(&lock, flags);
-		vmpeg4_local_init();
-		vmpeg4_prot_init();
-		spin_unlock_irqrestore(&lock, flags);
-#ifndef CONFIG_POST_PROCESS_MANAGER
-		vf_reg_provider(&vmpeg_vf_prov);
-#endif
-		amvdec_start();
+		schedule_work(&reset_work);
 	}
 
 
@@ -1080,6 +1088,8 @@ static int amvdec_mpeg4_probe(struct platform_device *pdev)
 
 	pdata->dec_status = vmpeg4_dec_status;
 
+	INIT_WORK(&reset_work, reset_do_work);
+
 	vmpeg4_vdec_info_init();
 
 	if (vmpeg4_init() < 0) {
@@ -1116,6 +1126,8 @@ static int amvdec_mpeg4_remove(struct platform_device *pdev)
 		vf_unreg_provider(&vmpeg_vf_prov);
 		stat &= ~STAT_VF_HOOK;
 	}
+
+	cancel_work_sync(&reset_work);
 
 	amvdec_disable();
 
