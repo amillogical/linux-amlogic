@@ -47,6 +47,8 @@
 
 
 #define RES_IS_MAPED
+#define DEFAULT_TVP_SIZE_FOR_4K (256 * SZ_1M)
+#define DEFAULT_TVP_SIZE_FOR_NO4K (160 * SZ_1M)
 
 #define ALLOC_MAX_RETRY 1
 
@@ -505,13 +507,20 @@ struct codec_mm_s *codec_mm_alloc(const char *owner, int size,
 		return NULL;
 	}
 
-	if ((mgt->tvp_enable & 3) &&
-		(memflags & CODEC_MM_FLAGS_FOR_VDECODER)) {
+	if (mgt->tvp_enable & 3) {
 		/*if tvp & video decoder used tvp memory.
 		   Audio don't protect for default now.
 		*/
-		memflags = memflags & (~CODEC_MM_FLAGS_FROM_MASK);
-		memflags |= CODEC_MM_FLAGS_TVP;
+		if (memflags & CODEC_MM_FLAGS_TVP) {
+			/*clear other flags, when tvp mode.*/
+			memflags = memflags & (~CODEC_MM_FLAGS_FROM_MASK);
+			memflags |= CODEC_MM_FLAGS_TVP;
+		}
+	} else { /*tvp not enabled*/
+		if (memflags & CODEC_MM_FLAGS_TVP) {
+			pr_err("TVP not enabled, when alloc from tvp %s need %d\n",
+				owner, size);
+		}
 	}
 	if ((memflags & CODEC_MM_FLAGS_FROM_MASK) == 0)
 		memflags |= CODEC_MM_FLAGS_DMA;
@@ -528,7 +537,7 @@ struct codec_mm_s *codec_mm_alloc(const char *owner, int size,
 		!(memflags & CODEC_MM_FLAGS_FOR_SCATTER)) {
 		/*if not scatter, free scatter caches.*/
 		pr_err(" No mem ret=%d, clear scatter cache!!\n", ret);
-		codec_mm_scatter_free_all_ignorecache();
+		codec_mm_scatter_free_all_ignorecache(1);
 		ret = codec_mm_alloc_in(mgt, mem);
 	}
 	if (ret < 0) {
@@ -1096,7 +1105,7 @@ int codec_mm_enough_for_size(int size, int with_wait)
 	int have_mem = codec_mm_alloc_pre_check_in(mgt, size, 0);
 	if (!have_mem && with_wait && mgt->alloced_for_sc_cnt > 0) {
 		pr_err(" No mem, clear scatter cache!!\n");
-		codec_mm_scatter_free_all_ignorecache();
+		codec_mm_scatter_free_all_ignorecache(1);
 		have_mem = codec_mm_alloc_pre_check_in(mgt, size, 0);
 		if (have_mem)
 			return 1;
@@ -1144,9 +1153,13 @@ int codec_mm_mgt_init(struct device *dev)
 	mgt->total_codec_mem_size += mgt->total_cma_size;
 	/*2M for audio not protect.*/
 	mgt->tvp_pool.default_4k_size = mgt->total_codec_mem_size - SZ_1M * 2;
+	if (mgt->tvp_pool.default_4k_size > DEFAULT_TVP_SIZE_FOR_4K)
+		mgt->tvp_pool.default_4k_size = DEFAULT_TVP_SIZE_FOR_4K;
 	/*97MB -> 160MB, may not enough for h265*/
-	mgt->tvp_pool.default_size = mgt->total_codec_mem_size > SZ_1M * 160 ?
-			SZ_1M * 160 : mgt->tvp_pool.default_4k_size;
+	mgt->tvp_pool.default_size = (mgt->total_codec_mem_size - (SZ_1M * 2)) >
+			DEFAULT_TVP_SIZE_FOR_NO4K ?
+				DEFAULT_TVP_SIZE_FOR_NO4K :
+				mgt->tvp_pool.default_4k_size;
 
 	mgt->cma_res_pool.default_size = mgt->total_cma_size;
 	mgt->cma_res_pool.default_4k_size = mgt->total_cma_size;
@@ -1267,7 +1280,7 @@ static ssize_t tvp_enable_store(struct class *class,
 	tvp changes.
 	*/
 	codec_mm_keeper_free_all_keep(2);
-	codec_mm_scatter_free_all_ignorecache();
+	codec_mm_scatter_free_all_ignorecache(3);
 	switch (val) {
 	case 0:
 		ret = codec_mm_extpool_pool_release(&mgt->tvp_pool);
