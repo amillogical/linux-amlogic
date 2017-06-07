@@ -316,4 +316,6 @@ extern int aml_audiomode_autodet(struct dvb_frontend *fe);
 extern void retrieve_frequency_offset(int *freq_offset);
 extern int aml_atvdemod_get_snr_ex(void);
 
+/*from amldemod/amlfrontend.c*/
+extern int vdac_enable_check_dtv(void);
 #endif /* __ATVDEMOD_FUN_H */
