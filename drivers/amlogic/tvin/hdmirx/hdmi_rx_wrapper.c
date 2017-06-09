@@ -2225,10 +2225,14 @@ void rx_aud_pll_ctl(bool en)
 		wr_reg_hhi(HHI_ADC_PLL_CNTL4, 0x805);
 		tmp = hdmirx_rd_top(TOP_ACR_CNTL_STAT) | (1<<11);
 		hdmirx_wr_top(TOP_ACR_CNTL_STAT, tmp);
+#ifdef CONFIG_AMAUDIO2
 		External_Mute(0);
+#endif
 	} else{
 		/* disable pll, into reset mode */
+#ifdef CONFIG_AMAUDIO2
 		External_Mute(1);
+#endif
 		wr_reg_hhi(HHI_AUD_PLL_CNTL, 0x20000000);
 	}
 }

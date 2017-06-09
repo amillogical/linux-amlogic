@@ -896,7 +896,9 @@ extern int hdmirx_dev_init(void);
 extern void dump_eq_data(void);
 extern void repeater_dwork_handle(struct work_struct *work);
 /* for other modules */
+#ifdef CONFIG_AMAUDIO2
 extern int External_Mute(int mute_flag);
+#endif
 extern void vdac_enable(bool on, unsigned int module_sel);
 extern void hdmirx_dv_packet_stop(void);
 
