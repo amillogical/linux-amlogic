@@ -123,7 +123,6 @@ static u32 try_alloc_in_cma_page_cnt;
 static u32 try_alloc_in_sys_page_cnt_max;
 static u32 try_alloc_in_sys_page_cnt_min;
 static u32 enable_slot_from_sys;
-static u32 no_cache_size_M;
 static u32 support_from_slot_sys;
 
 struct codec_mm_scatter_mgt {
@@ -2349,7 +2348,6 @@ static struct mconfig codec_mm_sc_configs[] = {
 		&try_alloc_in_sys_page_cnt_min),
 	MC_PU32("enable_slot_from_sys",
 		&enable_slot_from_sys),
-	MC_PU32("no_cache_size_M", &no_cache_size_M),
 };
 
 static struct mconfig_node codec_mm_sc;
@@ -2369,7 +2367,6 @@ int codec_mm_scatter_mgt_init(void)
 	try_alloc_in_sys_page_cnt_min = smgt->try_alloc_in_sys_page_cnt_min;
 	enable_slot_from_sys = smgt->enable_slot_from_sys;
 	support_from_slot_sys = smgt->support_from_slot_sys;
-	no_cache_size_M = smgt->no_cache_size_M;
 
 	INIT_REG_NODE_CONFIGS("media.codec_mm",
 		&codec_mm_sc, "scatter",

@@ -857,7 +857,6 @@ extern bool hdmirx_tmds_6g(void);
 extern void rx_hpd_to_esm_handle(struct work_struct *work);
 
 extern void cecrx_hw_init(void);
-extern void cecrx_irq_handle(void);
 extern int  meson_clk_measure(unsigned int clk_mux);
 extern void esm_set_stable(bool stable);
 extern void hdcp22_suspend(void);
@@ -878,7 +877,9 @@ extern int hdmirx_dev_init(void);
 extern void dump_eq_data(void);
 
 /* for other modules */
+#ifdef CONFIG_AMAUDIO2
 extern int External_Mute(int mute_flag);
+#endif
 extern void vdac_enable(bool on, unsigned int module_sel);
 
 #endif  /* _TVHDMI_H */
