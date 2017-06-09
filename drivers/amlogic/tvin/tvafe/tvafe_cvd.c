@@ -25,13 +25,6 @@
 #include "tvafe_cvd.h"
 #include "../vdin/vdin_regs.h"
 /***************************Local defines**********************************/
-/* cvd2 memory size defines */
-#define DECODER_MOTION_BUFFER_ADDR_OFFSET   0x70000
-#define DECODER_MOTION_BUFFER_4F_LENGTH     0x15a60
-#define DECODER_VBI_ADDR_OFFSET             0x86000
-#define DECODER_VBI_VBI_SIZE                0x1000
-#define DECODER_VBI_START_ADDR              0x0
-
 /* cvd2 mode detection defines */
 #define TVAFE_CVD2_CORDIC_IN_MAX            224
 /* CVD cordic range of right fmt */
@@ -369,7 +362,7 @@ static void tvafe_cvd2_memory_init(struct tvafe_cvd2_mem_s *mem,
 	W_APB_BIT(ACD_REG_2A ,
 		cvd_mem_4f_length[fmt - TVIN_SIG_FMT_CVBS_NTSC_M],
 		REG_4F_MOTION_LENGTH_BIT, REG_4F_MOTION_LENGTH_WID);
-
+#if 1
 	/* vbi memory setting */
 	W_APB_REG(ACD_REG_2F, (cvd2_addr + vbi_offset));
 	W_APB_BIT(ACD_REG_21, vbi_size,
@@ -378,7 +371,7 @@ static void tvafe_cvd2_memory_init(struct tvafe_cvd2_mem_s *mem,
 		AML_VBI_START_ADDR_BIT, AML_VBI_START_ADDR_WID);
 	/*open front lpf for av ring*/
 	W_APB_BIT(ACD_REG_26, 1, 8, 1);
-
+#endif
 	return;
 }
 /*
@@ -475,6 +468,10 @@ static void tvafe_cvd2_write_mode_reg(struct tvafe_cvd2_s *cvd2,
 				(cvd_part2_table[cvd2->config_fmt-
 				TVIN_SIG_FMT_CVBS_NTSC_M][i]));
 	}
+	if (((cvd2->vd_port == TVIN_PORT_CVBS1) ||
+		(cvd2->vd_port == TVIN_PORT_CVBS2)) &&
+		(cvd2->config_fmt == TVIN_SIG_FMT_CVBS_NTSC_M))
+		W_APB_REG(CVD2_VSYNC_SIGNAL_THRESHOLD, 0x7d);
 
 	/* reload CVD2 reg 0x87, 0x93, 0x94, 0x95, 0x96, 0xe6, 0xfa (int) */
 	W_APB_REG(((CVD_BASE_ADD+CVD_PART3_REG_0)<<2),
@@ -878,7 +875,7 @@ inline void tvafe_cvd2_try_format(struct tvafe_cvd2_s *cvd2,
 {
 	/* check format validation */
 	if ((fmt < TVIN_SIG_FMT_CVBS_NTSC_M) ||
-		(fmt > TVIN_SIG_FMT_CVBS_SECAM)) {
+		(fmt > TVIN_SIG_FMT_CVBS_NTSC_50)) {
 
 		if (cvd_dbg_en)
 			pr_err("[tvafe..] %s: cvd2 try format error!!!\n",
@@ -1430,6 +1427,7 @@ static bool tvafe_cvd2_condition_shift(struct tvafe_cvd2_s *cvd2)
 		case TVIN_SIG_FMT_CVBS_PAL_I:
 		case TVIN_SIG_FMT_CVBS_PAL_CN:
 		case TVIN_SIG_FMT_CVBS_SECAM:
+		case TVIN_SIG_FMT_CVBS_NTSC_50:
 			if (!cvd2->hw.line625) {
 
 				ret = true;
@@ -1566,7 +1564,6 @@ static bool tvafe_cvd2_condition_shift(struct tvafe_cvd2_s *cvd2)
 
 		return false;
 
-
 	/* check pal/secam flag */
 		switch (cvd2->config_fmt) {
 
@@ -1583,6 +1580,7 @@ static bool tvafe_cvd2_condition_shift(struct tvafe_cvd2_s *cvd2)
 			break;
 		case TVIN_SIG_FMT_CVBS_NTSC_443:
 		case TVIN_SIG_FMT_CVBS_NTSC_M:
+		case TVIN_SIG_FMT_CVBS_NTSC_50:
 			if (cvd2->hw.pal)
 				ret = true;
 			break;
@@ -1602,6 +1600,7 @@ static bool tvafe_cvd2_condition_shift(struct tvafe_cvd2_s *cvd2)
 		case TVIN_SIG_FMT_CVBS_PAL_CN:
 		case TVIN_SIG_FMT_CVBS_PAL_M:
 		case TVIN_SIG_FMT_CVBS_NTSC_M:
+		case TVIN_SIG_FMT_CVBS_NTSC_50:
 			if (!cvd2->hw.fsc_358 && cvd2->hw.fsc_443)
 				ret = true;
 			break;
@@ -1772,8 +1771,14 @@ static void tvafe_cvd2_search_video_mode(struct tvafe_cvd2_s *cvd2,
 				/* line625+brust358+pal
 				-> pal_cn */
 				cvd2->info.state = TVAFE_CVD2_STATE_FIND;
-
-			} else {
+			} else if (cvd2->hw.line625 &&
+				cvd2->hw.fsc_358 &&
+				!cvd2->hw.pal &&
+				!cvd2->hw.fsc_443 &&
+				!cvd2->hw.secam)
+					tvafe_cvd2_try_format(cvd2, mem,
+					TVIN_SIG_FMT_CVBS_NTSC_50);
+			else {
 				if (cvd_dbg_en)
 					pr_info("[tvafe..]%s dismatch pal_cn line625 %d, fsc358 %d,pal %d",
 					__func__, cvd2->hw.line625,
@@ -1792,6 +1797,31 @@ static void tvafe_cvd2_search_video_mode(struct tvafe_cvd2_s *cvd2,
 					tvafe_cvd2_try_format(cvd2, mem,
 					TVIN_SIG_FMT_CVBS_NTSC_443);
 				}
+			break;
+		case TVIN_SIG_FMT_CVBS_NTSC_50:
+			if (cvd2->hw.line625 && cvd2->hw.fsc_358 &&
+			cvd2->hw.pal)
+				tvafe_cvd2_try_format(cvd2, mem,
+						TVIN_SIG_FMT_CVBS_PAL_CN);
+			else if (cvd2->hw.line625 &&
+				cvd2->hw.fsc_358 &&
+				!cvd2->hw.pal &&
+				!cvd2->hw.fsc_443 &&
+				!cvd2->hw.secam)
+				cvd2->info.state = TVAFE_CVD2_STATE_FIND;
+			else if (cvd2->hw.line625)
+					tvafe_cvd2_try_format(cvd2, mem,
+					TVIN_SIG_FMT_CVBS_PAL_I);
+			else if (!cvd2->hw.line625 &&
+			cvd2->hw.fsc_358 &&
+			cvd2->hw.pal)
+				tvafe_cvd2_try_format(cvd2, mem,
+				TVIN_SIG_FMT_CVBS_PAL_M);
+			else if (!cvd2->hw.line625 &&
+			cvd2->hw.fsc_443 &&
+			!cvd2->hw.pal)
+				tvafe_cvd2_try_format(cvd2, mem,
+				TVIN_SIG_FMT_CVBS_NTSC_443);
 			break;
 		case TVIN_SIG_FMT_CVBS_SECAM:
 			if (cvd2->hw.line625 && cvd2->hw.secam_detected &&

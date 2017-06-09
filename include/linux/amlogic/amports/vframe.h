@@ -70,6 +70,8 @@
 #define VFRAME_FLAG_NO_DISCONTINUE      1
 #define VFRAME_FLAG_SWITCHING_FENSE     2
 #define VFRAME_FLAG_HIGH_BANDWITH	4
+#define VFRAME_FLAG_ERROR_RECOVERY		8
+#define VFRAME_FLAG_SYNCFRAME			0x10
 
 enum pixel_aspect_ratio_e {
 	PIXEL_ASPECT_RATIO_1_1,
@@ -196,6 +198,12 @@ enum vframe_secam_phase_e {
 	VFRAME_PHASE_DB = 0,
 	VFRAME_PHASE_DR,
 };
+enum vframe_disp_mode_e {
+	VFRAME_DISP_MODE_NULL = 0,
+	VFRAME_DISP_MODE_UNKNOWN,
+	VFRAME_DISP_MODE_SKIP,
+	VFRAME_DISP_MODE_OK,
+};
 
 
 #define BITDEPTH_Y_SHIFT 8
@@ -223,6 +231,7 @@ enum vframe_secam_phase_e {
 #define FULL_PACK_422_MODE		0x2
 struct vframe_s {
 	u32 index;
+	u32 index_disp;
 	u32 type;
 	u32 type_backup;
 	u32 type_original;

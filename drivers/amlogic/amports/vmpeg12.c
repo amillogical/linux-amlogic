@@ -31,6 +31,8 @@
 #include <linux/amlogic/amports/vframe_receiver.h>
 #include <linux/amlogic/cpu_version.h>
 #include <linux/amlogic/codec_mm/codec_mm.h>
+#include <linux/amlogic/codec_mm/configs.h>
+
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 
@@ -85,12 +87,12 @@ MODULE_AMLOG(LOG_LEVEL_ERROR, 0, LOG_LEVEL_DESC, LOG_DEFAULT_MASK_DESC);
 
 #define SEQINFO_EXT_AVAILABLE   0x80000000
 #define SEQINFO_PROG            0x00010000
+#define CCBUF_SIZE      (5*1024)
 
 #define VF_POOL_SIZE        32
 #define DECODE_BUFFER_NUM_MAX 8
 #define PUT_INTERVAL        (HZ/100)
-/*(1 * SZ_1M + CCBUF_SIZE)*/
-#define WORKSPACE_SIZE		(SZ_64K + CCBUF_SIZE)
+#define WORKSPACE_SIZE		(2*SZ_64K)
 #define MAX_BMMU_BUFFER_NUM (DECODE_BUFFER_NUM_MAX + 1)
 
 
@@ -109,7 +111,7 @@ MODULE_AMLOG(LOG_LEVEL_ERROR, 0, LOG_LEVEL_DESC, LOG_DEFAULT_MASK_DESC);
 #if 1/* MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON6 */
 #define NV21
 #endif
-#define CCBUF_SIZE      (5*1024)
+
 
 enum {
 	FRAME_REPEAT_TOP,
@@ -160,8 +162,8 @@ static u32 frame_width, frame_height, frame_dur, frame_prog;
 static u32 saved_resolution;
 static struct timer_list recycle_timer;
 static u32 stat;
-
-static u32 buf_size, ccbuf_phyAddress;
+static u32 buf_size = 32 * 1024 * 1024;
+static u32 ccbuf_phyAddress;
 static void *ccbuf_phyAddress_virt;
 static int ccbuf_phyAddress_is_remaped_nocache;
 
@@ -177,6 +179,8 @@ static s32 frame_force_skip_flag;
 static s32 error_frame_skip_level;
 static s32 wait_buffer_counter;
 static u32 first_i_frame_ready;
+
+static struct work_struct userdata_push_work;
 
 static inline int pool_index(struct vframe_s *vf)
 {
@@ -275,6 +279,31 @@ static bool error_skip(u32 info, struct vframe_s *vf)
 	return false;
 }
 
+static void userdata_push_do_work(struct work_struct *work)
+{
+	u32 reg;
+
+	struct userdata_poc_info_t user_data_poc;
+
+	user_data_poc.poc_info = 0;
+	user_data_poc.poc_number = 0;
+	reg = READ_VREG(MREG_BUFFEROUT);
+
+	if (!ccbuf_phyAddress_is_remaped_nocache &&
+		ccbuf_phyAddress &&
+		ccbuf_phyAddress_virt) {
+		codec_mm_dma_flush(
+			ccbuf_phyAddress_virt,
+			CCBUF_SIZE,
+			DMA_FROM_DEVICE);
+	}
+	wakeup_userdata_poll(user_data_poc,
+		reg & 0xffff,
+		(unsigned long)ccbuf_phyAddress_virt,
+		CCBUF_SIZE, 0);
+	WRITE_VREG(MREG_BUFFEROUT, 0);
+}
+
 static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 {
 	u32 reg, info, seqinfo, offset, pts, pts_valid = 0;
@@ -286,22 +315,11 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 	reg = READ_VREG(MREG_BUFFEROUT);
 
 	if ((reg >> 16) == 0xfe) {
-		if (!ccbuf_phyAddress_is_remaped_nocache &&
-			ccbuf_phyAddress &&
-			ccbuf_phyAddress_virt) {
-			codec_mm_dma_flush(
-				ccbuf_phyAddress_virt,
-				CCBUF_SIZE,
-				DMA_FROM_DEVICE);
-		}
-		wakeup_userdata_poll(
-			reg & 0xffff,
-			(unsigned long)ccbuf_phyAddress_virt,
-			CCBUF_SIZE, 0);
-		WRITE_VREG(MREG_BUFFEROUT, 0);
+		schedule_work(&userdata_push_work);
 	} else if (reg) {
 		info = READ_VREG(MREG_PIC_INFO);
 		offset = READ_VREG(MREG_FRAME_OFFSET);
+		seqinfo = READ_VREG(MREG_SEQ_INFO);
 
 		if ((first_i_frame_ready == 0) &&
 			((info & PICINFO_TYPE_MASK) == PICINFO_TYPE_I) &&
@@ -318,6 +336,9 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 		/*if (frame_prog == 0) */
 		{
 			frame_prog = info & PICINFO_PROG;
+			if ((seqinfo & SEQINFO_EXT_AVAILABLE)
+				&& (!(seqinfo & SEQINFO_PROG)))
+				frame_prog = 0;
 		}
 
 		if ((dec_control &
@@ -435,7 +456,7 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 			/* to make DI easy. */
 			dec_control |= DEC_CONTROL_FLAG_FORCE_SEQ_INTERLACE;
 #endif
-
+#if 0
 			if (info & PICINFO_FRAME) {
 				frame_rpt_state =
 					(info & PICINFO_TOP_FIRST) ?
@@ -451,14 +472,18 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 				}
 				frame_rpt_state = FRAME_REPEAT_NONE;
 			}
-
+#else
+			frame_rpt_state = FRAME_REPEAT_NONE;
+#endif
 			if (kfifo_get(&newframe_q, &vf) == 0) {
 				pr_info
 				("fatal error, no available buffer slot.");
 				return IRQ_HANDLED;
 			}
-
-			vfbuf_use[index] = 2;
+			if (info & PICINFO_RPT_FIRST)
+				vfbuf_use[index] = 3;
+			else
+				vfbuf_use[index] = 2;
 
 			set_frame_info(vf);
 			vf->signal_type = 0;
@@ -548,8 +573,48 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 					VFRAME_EVENT_PROVIDER_VFRAME_READY,
 					NULL);
 			}
-		}
 
+			if (info & PICINFO_RPT_FIRST) {
+				if (kfifo_get(&newframe_q, &vf) == 0) {
+					pr_info("error, no available buffer slot.");
+					return IRQ_HANDLED;
+				}
+
+				set_frame_info(vf);
+
+				vf->index = index;
+				vf->type = (first_field_type ==
+						VIDTYPE_INTERLACE_TOP) ?
+						VIDTYPE_INTERLACE_TOP :
+						VIDTYPE_INTERLACE_BOTTOM;
+#ifdef NV21
+				vf->type |= VIDTYPE_VIU_NV21;
+#endif
+				vf->duration >>= 1;
+				vf->duration_pulldown =
+					(info & PICINFO_RPT_FIRST) ?
+						vf->duration >> 1 : 0;
+				vf->duration += vf->duration_pulldown;
+				vf->orientation = 0;
+				vf->canvas0Addr = vf->canvas1Addr =
+							index2canvas(index);
+				vf->pts = 0;
+				vf->pts_us64 = 0;
+				if ((error_skip(info, vf)) ||
+					((first_i_frame_ready == 0)
+						&& ((PICINFO_TYPE_MASK & info)
+							!= PICINFO_TYPE_I))) {
+					kfifo_put(&recycle_q,
+					(const struct vframe_s *)vf);
+				} else {
+					kfifo_put(&display_q,
+						(const struct vframe_s *)vf);
+					vf_notify_receiver(PROVIDER_NAME,
+					VFRAME_EVENT_PROVIDER_VFRAME_READY,
+						NULL);
+				}
+			}
+		}
 		WRITE_VREG(MREG_BUFFEROUT, 0);
 	}
 
@@ -776,10 +841,10 @@ static int vmpeg12_canvas_init(void)
 
 		if (i == (MAX_BMMU_BUFFER_NUM - 1)) {
 
-			WRITE_VREG(MREG_CO_MV_START, buf_start);
+			WRITE_VREG(MREG_CO_MV_START, (buf_start + CCBUF_SIZE));
 			if (!ccbuf_phyAddress) {
 				ccbuf_phyAddress
-				= (u32)(buf_start + SZ_64K + CCBUF_SIZE);
+				= (u32)buf_start;
 
 				ccbuf_phyAddress_virt
 				= codec_mm_phys_to_virt(ccbuf_phyAddress);
@@ -857,7 +922,7 @@ static int vmpeg12_prot_init(void)
 		WRITE_VREG(POWER_CTL_VLD, save_reg);
 
 	} else
-		WRITE_MPEG_REG(RESET0_REGISTER, RESET_IQIDCT | RESET_MC);
+		WRITE_RESET_REG(RESET0_REGISTER, RESET_IQIDCT | RESET_MC);
 
 	ret = vmpeg12_canvas_init();
 
@@ -1037,8 +1102,6 @@ static int amvdec_mpeg12_probe(struct platform_device *pdev)
 	if (pdata->sys_info)
 		vmpeg12_amstream_dec_info = *pdata->sys_info;
 
-	buf_size = pdata->alloc_mem_size;
-
 	pdata->dec_status = vmpeg12_dec_status;
 
 	vmpeg12_vdec_info_init();
@@ -1050,6 +1113,7 @@ static int amvdec_mpeg12_probe(struct platform_device *pdev)
 
 		return -ENODEV;
 	}
+	INIT_WORK(&userdata_push_work, userdata_push_do_work);
 
 	amlog_level(LOG_LEVEL_INFO, "amvdec_mpeg12 probe end.\n");
 
@@ -1058,6 +1122,8 @@ static int amvdec_mpeg12_probe(struct platform_device *pdev)
 
 static int amvdec_mpeg12_remove(struct platform_device *pdev)
 {
+	cancel_work_sync(&userdata_push_work);
+
 	if (stat & STAT_VDEC_RUN) {
 		amvdec_stop();
 		stat &= ~STAT_VDEC_RUN;
@@ -1120,6 +1186,15 @@ static struct codec_profile_t amvdec_mpeg12_profile = {
 	.profile = ""
 };
 
+
+static struct mconfig mpeg12_configs[] = {
+	MC_PU32("stat", &stat),
+	MC_PU32("dec_control", &dec_control),
+	MC_PU32("error_frame_skip_level", &error_frame_skip_level),
+};
+static struct mconfig_node mpeg12_node;
+
+
 static int __init amvdec_mpeg12_driver_init_module(void)
 {
 	amlog_level(LOG_LEVEL_INFO, "amvdec_mpeg12 module init\n");
@@ -1130,6 +1205,8 @@ static int __init amvdec_mpeg12_driver_init_module(void)
 		return -ENODEV;
 	}
 	vcodec_profile_register(&amvdec_mpeg12_profile);
+	INIT_REG_NODE_CONFIGS("media.decoder", &mpeg12_node,
+		"mpeg12", mpeg12_configs, CONFIG_FOR_RW);
 	return 0;
 }
 
@@ -1141,9 +1218,6 @@ static void __exit amvdec_mpeg12_driver_remove_module(void)
 }
 
 /****************************************/
-
-module_param(stat, uint, 0664);
-MODULE_PARM_DESC(stat, "\n amvdec_mpeg12 stat\n");
 module_param(dec_control, uint, 0664);
 MODULE_PARM_DESC(dec_control, "\n amvmpeg12 decoder control\n");
 module_param(error_frame_skip_level, uint, 0664);

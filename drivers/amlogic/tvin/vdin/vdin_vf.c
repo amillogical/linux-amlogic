@@ -34,7 +34,7 @@
 
 /* Local Headers */
 #include "vdin_vf.h"
-
+#include "vdin_ctl.h"
 static bool vf_log_enable = true;
 static bool vf_log_fe = true;
 static bool vf_log_be = true;
@@ -48,6 +48,9 @@ MODULE_PARM_DESC(vf_log_fe, "enable/disable vframe manager log frontend");
 module_param(vf_log_be, bool, 0664);
 MODULE_PARM_DESC(vf_log_be, "enable/disable vframe manager log backen");
 
+static unsigned int vf_skip_cnt = 1;
+module_param(vf_skip_cnt, uint, 0664);
+MODULE_PARM_DESC(vf_skip_cnt, "skip frame cnt for hdmi");
 
 #ifdef VF_LOG_EN
 void vf_log_init(struct vf_pool *p)
@@ -314,6 +317,7 @@ struct vf_pool *vf_pool_alloc(int size)
 	spin_lock_init(&p->wt_lock);
 	spin_lock_init(&p->fz_lock);
 	spin_lock_init(&p->tmp_lock);
+	spin_lock_init(&p->dv_lock);
 	/* initialize list head */
 	INIT_LIST_HEAD(&p->wr_list);
 	INIT_LIST_HEAD(&p->rd_list);
@@ -378,6 +382,7 @@ int vf_pool_init(struct vf_pool *p, int size)
 	p->tmp_list_size = 0;
 	/* initialize provider write list */
 	for (i = 0; i < size; i++) {
+		p->dv_buf_size[i] = 0;
 		master = vf_get_master(p, i);
 		if (master == NULL) {
 			log_state = false;
@@ -401,6 +406,13 @@ int vf_pool_init(struct vf_pool *p, int size)
 		slave->status = VF_STATUS_SL;
 	}
 	atomic_set(&p->buffer_cnt, 0);
+	for (i = 0; i < VFRAME_DISP_MAX_NUM; i++)
+		p->disp_mode[i] = VFRAME_DISP_MODE_NULL;
+	p->disp_index = 0;
+	if (vf_skip_cnt == 2)
+		p->disp_index_last2 = 0;
+	p->disp_index_last = 0;
+	p->disp_index_cur = 0;
 #ifdef VF_LOG_EN
 	vf_log_init(p);
 	vf_log(p, VF_OPERATION_INIT, log_state);
@@ -739,6 +751,13 @@ void vdin_vf_put(struct vframe_s *vf, void *op_arg)
 		return;
 	p = (struct vf_pool *)op_arg;
 	receiver_vf_put(vf, p);
+	/*clean dv-buf-size*/
+	if (vf && (dv_dbg_mask & DV_CLEAN_UP_MEM)) {
+		p->dv_buf_size[vf->index] = 0;
+		if (p->dv_buf_ori[vf->index])
+			memset(p->dv_buf_ori[vf->index], 0, dolby_size_byte);
+
+	}
 }
 int vdin_vf_states(struct vframe_states *vf_ste, void *op_arg)
 {
@@ -874,5 +893,74 @@ void vdin_dump_vf_state(struct vf_pool *p)
 	spin_unlock_irqrestore(&p->tmp_lock, flags);
 	pr_info("buffer get count %d.\n", atomic_read(&p->buffer_cnt));
 
+}
+void vdin_vf_disp_mode_update(struct vf_entry *vfe, struct vf_pool *p)
+{
+	if (vf_skip_cnt == 2)
+		p->disp_index_last2 = p->disp_index_last;
+	p->disp_index_last = p->disp_index_cur;
+	p->disp_index++;
+	if (p->disp_index >= VFRAME_DISP_MAX_NUM)
+		p->disp_index = 0;
+	p->disp_index_cur = p->disp_index;
+	vfe->vf.index_disp = p->disp_index_cur;
+	if (((p->disp_index_last == 0) &&
+		(p->disp_mode[p->disp_index_last] == VFRAME_DISP_MODE_NULL)) ||
+		(p->disp_mode[p->disp_index_last] == VFRAME_DISP_MODE_SKIP)) {
+		if (vf_skip_cnt == 2)
+			p->disp_mode[p->disp_index_last2] =
+				VFRAME_DISP_MODE_UNKNOWN;
+		if (vf_skip_cnt == 1)
+			p->disp_mode[p->disp_index_last] =
+				VFRAME_DISP_MODE_UNKNOWN;
+		if (vf_skip_cnt == 0)
+			p->disp_mode[p->disp_index_cur] = VFRAME_DISP_MODE_OK;
+		else
+			p->disp_mode[p->disp_index_cur] =
+				VFRAME_DISP_MODE_UNKNOWN;
+	} else {
+		if (vf_skip_cnt == 2) {
+			/*last last vframe*/
+			p->disp_mode[p->disp_index_last2] = VFRAME_DISP_MODE_OK;
+			/*last vframe*/
+			p->disp_mode[p->disp_index_last] =
+				VFRAME_DISP_MODE_UNKNOWN;
+			/*current vframe*/
+			p->disp_mode[p->disp_index_cur] =
+				VFRAME_DISP_MODE_UNKNOWN;
+		} else if (vf_skip_cnt == 1) {
+			/*last vframe*/
+			p->disp_mode[p->disp_index_last] = VFRAME_DISP_MODE_OK;
+			/*current vframe*/
+			p->disp_mode[p->disp_index_cur] =
+				VFRAME_DISP_MODE_UNKNOWN;
+		} else if (vf_skip_cnt == 0) {
+			/*current vframe*/
+			p->disp_mode[p->disp_index_cur] = VFRAME_DISP_MODE_OK;
+		} else {
+			/*current vframe*/
+			p->disp_mode[p->disp_index_cur] = VFRAME_DISP_MODE_OK;
+		}
+	}
+
+}
+void vdin_vf_disp_mode_skip(struct vf_pool *p)
+{
+	if ((p->disp_index == 0) &&
+		(p->disp_mode[p->disp_index] == VFRAME_DISP_MODE_NULL))
+		return;
+	else {
+		/*last last vframe*/
+		if (vf_skip_cnt == 2)
+			p->disp_mode[p->disp_index_last2] =
+				VFRAME_DISP_MODE_SKIP;
+		/*last vframe*/
+		if (vf_skip_cnt == 1)
+			p->disp_mode[p->disp_index_last] =
+				VFRAME_DISP_MODE_SKIP;
+		/*current vframe*/
+		if (vf_skip_cnt == 0)
+			p->disp_mode[p->disp_index_cur] = VFRAME_DISP_MODE_SKIP;
+	}
 }
 

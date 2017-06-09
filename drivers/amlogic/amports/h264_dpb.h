@@ -6,24 +6,17 @@
 #define OUTPUT_BUFFER_IN_C
 
 #define PRINT_FLAG_ERROR              0x0
-#define PRINT_FLAG_DPB                0X0001
-#define PRINT_FLAG_DPB_DETAIL         0x0002
-#define PRINT_FLAG_DUMP_DPB           0x0004
-#define PRINT_FLAG_UCODE_EVT          0x0008
-#define PRINT_FLAG_VDEC_STATUS        0x0010
-#define PRINT_FLAG_VDEC_DETAIL        0x0020
-#define PRINT_FLAG_UCODE_DBG          0x0040
-#define PRINT_FLAG_TIME_STAMP         0x0080
-#define PRINT_FLAG_RUN_SCHEDULE       0x0100
+#define PRINT_FLAG_VDEC_STATUS        0X0001
+#define PRINT_FLAG_UCODE_EVT          0x0002
+#define PRINT_FLAG_DPB_DETAIL         0x0010
+#define PRINT_FLAG_DEC_DETAIL         0x0020
+#define PRINT_FLAG_VDEC_DETAIL        0x0040
+#define PRINT_FLAG_DUMP_DPB           0x0080
+#define PRINT_FRAMEBASE_DATA          0x0100
 #define PRINT_FLAG_DEBUG_POC          0x0200
-#define PRINT_FLAG_VDEC_DATA          0x0400
-#define RRINT_FLAG_RPM                0x0800
+#define RRINT_FLAG_RPM                0x0400
 #define DISABLE_ERROR_HANDLE          0x10000
-#define OUTPUT_CURRENT_BUF            0x20000
 #define ONLY_RESET_AT_START           0x40000
-#define CLEAR_INIT_FLAG_REG           0x80000
-#define FORCE_NO_SLICE                0x100000
-#define REINIT_DPB_TEST               0x200000
 
 
 #define MVC_EXTENSION_ENABLE 0
@@ -630,6 +623,7 @@ struct StorablePicture {
 
 	u32         pts;
 	u64         pts64;
+	unsigned char data_flag;
 };
 
 struct FrameStore {
@@ -663,9 +657,10 @@ struct FrameStore {
 	int         pre_output;
 	/* index in gFrameStore */
 	int       index;
-#define OTHER_DATA		0
-#define I_DATA			1
-#define NO_DATA		0xff
+#define OTHER_DATA		0x00
+#define I_DATA			0x01
+#define ERROR_FLAG		0x10
+#define NULL_FLAG		0x80
 	unsigned char data_flag;
 #endif
 	int       poc;

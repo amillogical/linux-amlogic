@@ -78,6 +78,7 @@
 #include <linux/compat.h>
 #endif
 #include <linux/amlogic/codec_mm/codec_mm.h>
+#include <linux/amlogic/codec_mm/configs.h>
 
 
 #define DEVICE_NAME "amstream-dev"
@@ -326,16 +327,19 @@ static int userdata_length;
 static wait_queue_head_t amstream_userdata_wait;
 #define USERDATA_FIFO_NUM    1024
 static struct userdata_poc_info_t userdata_poc_info[USERDATA_FIFO_NUM];
-static int userdata_poc_ri = 0, userdata_poc_wi;
+static int userdata_poc_ri, userdata_poc_wi;
+static int last_read_wi;
+
+
+static DEFINE_MUTEX(userdata_mutex);
 
 static struct stream_port_s ports[] = {
-#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_vbuf",
-		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO |
-			PORT_TYPE_DECODER_SCHED,
+		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO,
 		.fops = &vbuf_fops,
 	},
+#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_vbuf_sched",
 		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO |
@@ -348,38 +352,24 @@ static struct stream_port_s ports[] = {
 			PORT_TYPE_FRAME | PORT_TYPE_DECODER_SCHED,
 		.fops = &vframe_fops,
 	},
-#else
-	{
-		.name = "amstream_vbuf",
-		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO,
-		.fops = &vbuf_fops,
-	},
 #endif
 	{
 		.name = "amstream_abuf",
 		.type = PORT_TYPE_ES | PORT_TYPE_AUDIO,
 		.fops = &abuf_fops,
 	},
-#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_mpts",
 		.type = PORT_TYPE_MPTS | PORT_TYPE_VIDEO |
-			PORT_TYPE_AUDIO | PORT_TYPE_SUB |
-			PORT_TYPE_DECODER_SCHED,
+			PORT_TYPE_AUDIO | PORT_TYPE_SUB,
 		.fops = &mpts_fops,
 	},
+#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_mpts_sched",
 		.type = PORT_TYPE_MPTS | PORT_TYPE_VIDEO |
 			PORT_TYPE_AUDIO | PORT_TYPE_SUB |
 			PORT_TYPE_DECODER_SCHED,
-		.fops = &mpts_fops,
-	},
-#else
-	{
-		.name = "amstream_mpts",
-		.type = PORT_TYPE_MPTS | PORT_TYPE_VIDEO |
-			PORT_TYPE_AUDIO | PORT_TYPE_SUB,
 		.fops = &mpts_fops,
 	},
 #endif
@@ -409,14 +399,13 @@ static struct stream_port_s ports[] = {
 		.type = PORT_TYPE_USERDATA,
 		.fops = &userdata_fops,
 	},
-#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_hevc",
-		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO | PORT_TYPE_HEVC |
-			PORT_TYPE_DECODER_SCHED,
+		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO | PORT_TYPE_HEVC,
 		.fops = &vbuf_fops,
 		.vformat = VFORMAT_HEVC,
 	},
+#ifdef CONFIG_MULTI_DEC
 	{
 		.name = "amstream_hevc_frame",
 		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO | PORT_TYPE_HEVC |
@@ -430,9 +419,8 @@ static struct stream_port_s ports[] = {
 			PORT_TYPE_DECODER_SCHED,
 		.fops = &vbuf_fops,
 		.vformat = VFORMAT_HEVC,
-	}
+	},
 #ifdef CONFIG_AM_VDEC_DV
-	,
 	{
 		.name = "amstream_dves_avc",
 		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO |
@@ -445,15 +433,8 @@ static struct stream_port_s ports[] = {
 			PORT_TYPE_DECODER_SCHED | PORT_TYPE_DUALDEC,
 		.fops = &vbuf_fops,
 		.vformat = VFORMAT_HEVC,
-	}
+	},
 #endif
-#else
-	{
-		.name = "amstream_hevc",
-		.type = PORT_TYPE_ES | PORT_TYPE_VIDEO | PORT_TYPE_HEVC,
-		.fops = &vbuf_fops,
-		.vformat = VFORMAT_HEVC,
-	}
 #endif
 };
 
@@ -511,6 +492,17 @@ struct stream_buf_s *get_buf_by_type(u32 type)
 	}
 
 	return NULL;
+}
+
+unsigned char is_mult_inc(unsigned int type)
+{
+	unsigned char ret = 0;
+	if (amports_get_debug_flags() & 0xf000)
+		ret = (amports_get_debug_flags() & 0x1000)
+			? 1 : 0;
+	else if (type & PORT_TYPE_DECODER_SCHED)
+		ret = 1;
+	return ret;
 }
 
 void set_sample_rate_info(int arg)
@@ -587,6 +579,7 @@ static void video_port_release(struct port_priv_s *priv,
 {
 	struct stream_port_s *port = priv->port;
 	struct vdec_s *vdec = priv->vdec;
+	bool is_multidec = !vdec_single(vdec);
 
 	switch (release_num) {
 	default:
@@ -605,7 +598,7 @@ static void video_port_release(struct port_priv_s *priv,
 	/*fallthrough*/
 	case 2:
 		if ((port->type & PORT_TYPE_FRAME) == 0)
-			stbuf_release(pbuf);
+			stbuf_release(pbuf, is_multidec);
 	/*fallthrough*/
 	case 1:
 		;
@@ -658,7 +651,7 @@ static int video_port_init(struct port_priv_s *priv,
 		}
 	}
 
-	r = stbuf_init(pbuf, vdec);
+	r = stbuf_init(pbuf, vdec, false);
 	if (r < 0) {
 		pr_err("video_port_init %d, stbuf_init failed\n", __LINE__);
 		return r;
@@ -718,7 +711,7 @@ static void audio_port_release(struct stream_port_s *port,
 		adec_release(port->vformat);
 	/*fallthrough*/
 	case 2:
-		stbuf_release(pbuf);
+		stbuf_release(pbuf, false);
 	/*fallthrough*/
 	case 1:
 		;
@@ -738,9 +731,9 @@ static int audio_port_reset(struct stream_port_s *port,
 
 	pts_stop(PTS_TYPE_AUDIO);
 
-	stbuf_release(pbuf);
+	stbuf_release(pbuf, false);
 
-	r = stbuf_init(pbuf, NULL);
+	r = stbuf_init(pbuf, NULL, false);
 	if (r < 0)
 		return r;
 
@@ -778,9 +771,9 @@ static int sub_port_reset(struct stream_port_s *port,
 
 	port->flag &= (~PORT_FLAG_INITED);
 
-	stbuf_release(pbuf);
+	stbuf_release(pbuf, false);
 
-	r = stbuf_init(pbuf, NULL);
+	r = stbuf_init(pbuf, NULL, false);
 	if (r < 0)
 		return r;
 
@@ -812,7 +805,7 @@ static int audio_port_init(struct stream_port_s *port,
 		return 0;
 	}
 
-	r = stbuf_init(pbuf, NULL);
+	r = stbuf_init(pbuf, NULL, false);
 	if (r < 0)
 		return r;
 	r = adec_init(port);
@@ -839,7 +832,7 @@ static void sub_port_release(struct stream_port_s *port,
 		/* this is es sub */
 		esparser_release(pbuf);
 	}
-	stbuf_release(pbuf);
+	stbuf_release(pbuf, false);
 	sub_port_inited = 0;
 	return;
 }
@@ -852,7 +845,7 @@ static int sub_port_init(struct stream_port_s *port, struct stream_buf_s *pbuf)
 		return 0;
 	}
 
-	r = stbuf_init(pbuf, NULL);
+	r = stbuf_init(pbuf, NULL, false);
 	if (r < 0)
 		return r;
 
@@ -1320,10 +1313,8 @@ static unsigned int amstream_sub_poll(struct file *file,
 	return 0;
 }
 
-void set_userdata_poc(struct userdata_poc_info_t poc)
+static void set_userdata_poc(struct userdata_poc_info_t poc)
 {
-	/* pr_err("id %d, slicetype %d\n",
-	* userdata_slicetype_wi, slicetype); */
 	userdata_poc_info[userdata_poc_wi] = poc;
 	userdata_poc_wi++;
 	if (userdata_poc_wi == USERDATA_FIFO_NUM)
@@ -1336,17 +1327,60 @@ void init_userdata_fifo(void)
 {
 	userdata_poc_ri = 0;
 	userdata_poc_wi = 0;
+	userdata_length = 0;
 }
 
-int wakeup_userdata_poll(int wp, unsigned long start_phyaddr, int buf_size,
+void reset_userdata_fifo(int bInit)
+{
+	struct stream_buf_s *userdata_buf;
+	int wi, ri;
+	u32 rp, wp;
+
+	mutex_lock(&userdata_mutex);
+
+	wi = userdata_poc_wi;
+	ri = userdata_poc_ri;
+
+	userdata_buf = &bufs[BUF_TYPE_USERDATA];
+	rp = userdata_buf->buf_rp;
+	wp = userdata_buf->buf_wp;
+	if (bInit) {
+		/* decoder reset */
+		userdata_buf->buf_rp = 0;
+		userdata_buf->buf_wp = 0;
+		userdata_poc_ri = 0;
+		userdata_poc_wi = 0;
+	} else {
+		/* just clean fifo buffer */
+		userdata_buf->buf_rp = userdata_buf->buf_wp;
+		userdata_poc_ri = userdata_poc_wi;
+	}
+	userdata_length = 0;
+	last_read_wi = userdata_poc_wi;
+
+	mutex_unlock(&userdata_mutex);
+	pr_info("reset_userdata_fifo, bInit=%d, wi=%d, ri=%d, rp=%d, wp=%d\n",
+		bInit, wi, ri, rp, wp);
+}
+int wakeup_userdata_poll(struct userdata_poc_info_t poc,
+						int wp,
+						unsigned long start_phyaddr,
+						int buf_size,
 						 int data_length)
 {
 	struct stream_buf_s *userdata_buf = &bufs[BUF_TYPE_USERDATA];
+	mutex_lock(&userdata_mutex);
+
+	if (data_length & 0x7)
+		data_length = (((data_length + 8) >> 3) << 3);
+	set_userdata_poc(poc);
 	userdata_buf->buf_start = start_phyaddr;
 	userdata_buf->buf_wp = wp;
 	userdata_buf->buf_size = buf_size;
 	atomic_set(&userdata_ready, 1);
 	userdata_length += data_length;
+	mutex_unlock(&userdata_mutex);
+
 	wake_up_interruptible(&amstream_userdata_wait);
 	return userdata_buf->buf_rp;
 }
@@ -1365,51 +1399,117 @@ static unsigned int amstream_userdata_poll(struct file *file,
 static ssize_t amstream_userdata_read(struct file *file, char __user *buf,
 			size_t count, loff_t *ppos)
 {
-	u32 data_size, res, retVal = 0, buf_wp;
+	u32 data_size, res, retVal = 0;
+	u32 buf_wp, buf_rp, buf_size;
+	unsigned long buf_start;
 	struct stream_buf_s *userdata_buf = &bufs[BUF_TYPE_USERDATA];
-	buf_wp = userdata_buf->buf_wp;
-	if (userdata_buf->buf_start == 0 || userdata_buf->buf_size == 0)
-		return 0;
-	if (buf_wp == userdata_buf->buf_rp)
-		return 0;
-	if (buf_wp > userdata_buf->buf_rp)
-		data_size = buf_wp - userdata_buf->buf_rp;
-	else {
-		data_size =
-			userdata_buf->buf_size - userdata_buf->buf_rp + buf_wp;
+#ifdef DEBUG_USER_DATA
+	int old_wi;
+#endif
+
+	mutex_lock(&userdata_mutex);
+
+	if (userdata_poc_ri != last_read_wi) {
+		/***********************************************
+		app picks up poc counter wrong from last read user data
+		for H264. So, we need to recalculate userdata_poc_ri
+		to the userdata_poc_wi from the last read.
+		***********************************************/
+#if 0
+		pr_info("app pick up poc error: ri = %d, last_wi = %d\n",
+			userdata_poc_ri, last_read_wi);
+#endif
+		userdata_poc_ri = last_read_wi;
 	}
+
+	buf_wp = userdata_buf->buf_wp;
+	buf_rp = userdata_buf->buf_rp;
+	buf_size = userdata_buf->buf_size;
+	buf_start = userdata_buf->buf_start;
+#ifdef DEBUG_USER_DATA
+	old_wi = last_read_wi;
+#endif
+	last_read_wi = userdata_poc_wi;
+	mutex_unlock(&userdata_mutex);
+
+	if (buf_start == 0 || buf_size == 0)
+		return 0;
+	if (buf_wp == buf_rp)
+		return 0;
+	if (buf_wp > buf_rp)
+		data_size = buf_wp - buf_rp;
+	else
+		data_size = buf_size - buf_rp + buf_wp;
+
 	if (data_size > count)
 		data_size = count;
-	if (buf_wp < userdata_buf->buf_rp) {
-		int first_num = userdata_buf->buf_size - userdata_buf->buf_rp;
+#ifdef DEBUG_USER_DATA
+	pr_info("wi:%d ri:%d wp:%d rp:%d size:%d, last_read_wi=%d\n",
+		userdata_poc_wi, userdata_poc_ri,
+		buf_wp, buf_rp, data_size, old_wi);
+#endif
+	if (buf_wp < buf_rp) {
+		int first_num = buf_size - buf_rp;
 		if (data_size <= first_num) {
 			res = copy_to_user((void *)buf,
-				(void *)((userdata_buf->buf_rp +
-				userdata_buf->buf_start)), data_size);
+				(void *)((buf_rp +
+				buf_start)), data_size);
+			if (res)
+				pr_info("p1 read not end res=%d, request=%d\n",
+					res, data_size);
+
+			mutex_lock(&userdata_mutex);
 			userdata_buf->buf_rp += data_size - res;
+			mutex_unlock(&userdata_mutex);
 			retVal = data_size - res;
 		} else {
 			if (first_num > 0) {
 				res = copy_to_user((void *)buf,
-				(void *)((userdata_buf->buf_rp +
-				userdata_buf->buf_start)), first_num);
-				userdata_buf->buf_rp += first_num - res;
-				retVal = first_num - res;
-			} else {
-				res = copy_to_user((void *)buf,
-				(void *)((userdata_buf->buf_start)),
+				(void *)((buf_rp +
+				buf_start)), first_num);
+				if (res)
+					pr_info("p2 read not end res=%d, request=%d\n",
+						res, first_num);
+
+				res = copy_to_user((void *)buf+first_num,
+				(void *)(buf_start),
 				data_size - first_num);
+
+				if (res)
+					pr_info("p3 read not end res=%d, request=%d\n",
+						res, data_size - first_num);
+
+				mutex_lock(&userdata_mutex);
+				userdata_buf->buf_rp += data_size;
+				if (userdata_buf->buf_rp >= buf_size)
+					userdata_buf->buf_rp =
+						userdata_buf->buf_rp - buf_size;
+				mutex_unlock(&userdata_mutex);
+
+				retVal = data_size;
+			} else {
+				/* first_num == 0*/
+				res = copy_to_user((void *)buf,
+				(void *)((buf_start)),
+				data_size - first_num);
+				mutex_lock(&userdata_mutex);
 				userdata_buf->buf_rp =
 					data_size - first_num - res;
+				mutex_unlock(&userdata_mutex);
 				retVal = data_size - first_num - res;
 			}
 		}
 	} else {
 		res = copy_to_user((void *)buf,
-			(void *)((userdata_buf->buf_rp +
-			userdata_buf->buf_start)),
+			(void *)((buf_rp + buf_start)),
 			data_size);
+		if (res)
+			pr_info("p4 read not end res=%d, request=%d\n",
+				res, data_size);
+
+		mutex_lock(&userdata_mutex);
 		userdata_buf->buf_rp += data_size - res;
+		mutex_unlock(&userdata_mutex);
 		retVal = data_size - res;
 	}
 	return retVal;
@@ -1429,7 +1529,7 @@ static int amstream_open(struct inode *inode, struct file *file)
 
 	if (port->type & PORT_TYPE_VIDEO) {
 		for (s = &ports[0], i = 0; i < amstream_port_num; i++, s++) {
-			if (((s->type & PORT_TYPE_DECODER_SCHED) == 0) &&
+			if ((!is_mult_inc(s->type)) &&
 				(s->type & PORT_TYPE_VIDEO) &&
 				(s->flag & PORT_FLAG_IN_USE)) {
 				mutex_unlock(&amstream_mutex);
@@ -2066,7 +2166,7 @@ static long amstream_ioctl_set(struct port_priv_s *priv, ulong arg)
 		break;
 	}
 	case AMSTREAM_SET_FRAME_BASE_PATH:
-		if ((this->type & PORT_TYPE_DECODER_SCHED) &&
+		if (is_mult_inc(this->type) &&
 			(parm.frame_base_video_path < FRAME_BASE_PATH_MAX)) {
 			vdec_set_video_path(priv->vdec, parm.data_32);
 		} else
@@ -2773,20 +2873,52 @@ static long amstream_do_ioctl_old(struct port_priv_s *priv,
 	case AMSTREAM_IOC_UD_POC:
 		if (this->type & PORT_TYPE_USERDATA) {
 			/* *((u32 *)arg) = userdata_length; */
-			int res;
-			struct userdata_poc_info_t userdata_poc =
-					userdata_poc_info[userdata_poc_ri];
-			/* put_user(userdata_poc.poc_number,
-			 * (unsigned long __user *)arg); */
-			res =
+			int ri;
+#ifdef DEBUG_USER_DATA
+			int wi;
+#endif
+			int bDataAvail = 0;
+
+			mutex_lock(&userdata_mutex);
+			if (userdata_poc_wi != userdata_poc_ri) {
+				bDataAvail = 1;
+				ri = userdata_poc_ri;
+#ifdef DEBUG_USER_DATA
+				wi = userdata_poc_wi;
+#endif
+				userdata_poc_ri++;
+				if (userdata_poc_ri >= USERDATA_FIFO_NUM)
+					userdata_poc_ri = 0;
+			}
+			mutex_unlock(&userdata_mutex);
+			if (bDataAvail) {
+				int res;
+				struct userdata_poc_info_t userdata_poc =
+					userdata_poc_info[ri];
+#ifdef DEBUG_USER_DATA
+				pr_info("read poc: ri=%d, wi=%d, poc=%d, last_wi=%d\n",
+					ri, wi,
+					userdata_poc.poc_number,
+					last_read_wi);
+#endif
+				res =
 				copy_to_user((unsigned long __user *)arg,
 					&userdata_poc,
 					sizeof(struct userdata_poc_info_t));
-			if (res < 0)
+				if (res < 0)
+					r = -EFAULT;
+			} else {
 				r = -EFAULT;
-			userdata_poc_ri++;
-			if (USERDATA_FIFO_NUM == userdata_poc_ri)
-				userdata_poc_ri = 0;
+			}
+		} else {
+			r = -EINVAL;
+		}
+		break;
+
+	case AMSTREAM_IOC_UD_FLUSH_USERDATA:
+		if (this->type & PORT_TYPE_USERDATA) {
+			reset_userdata_fifo(0);
+			pr_info("reset_userdata_fifo\n");
 		} else
 			r = -EINVAL;
 		break;
@@ -3472,6 +3604,43 @@ error1:
 	return err;
 }
 
+int videobufused_show_fun(const char *trigger, int id, char *sbuf, int size)
+{
+	int ret = -1;
+	void *buf, *getbuf = NULL;
+	if (size < PAGE_SIZE) {
+		getbuf = (void *)__get_free_page(GFP_KERNEL);
+		if (!getbuf)
+			return -ENOMEM;
+		buf = getbuf;
+	} else {
+		buf = sbuf;
+	}
+
+	switch (id) {
+	case 0:
+		ret = videobufused_show(NULL, NULL , buf);
+		break;
+	default:
+		ret = -1;
+	}
+	if (ret > 0 && getbuf != NULL) {
+		ret = min_t(int, ret, size);
+		strncpy(sbuf, buf, ret);
+	}
+	if (getbuf != NULL)
+		free_page((unsigned long)getbuf);
+	return ret;
+}
+
+static struct mconfig amports_configs[] = {
+	MC_PI32("debugflags", &debugflags),
+	MC_PI32("def_4k_vstreambuf_sizeM", &def_4k_vstreambuf_sizeM),
+	MC_PI32("def_vstreambuf_sizeM", &def_vstreambuf_sizeM),
+	MC_PI32("slow_input", &slow_input),
+	MC_FUN_ID("videobufused", videobufused_show_fun, NULL, 0),
+};
+
 /*static struct resource memobj;*/
 static int amstream_probe(struct platform_device *pdev)
 {
@@ -3531,6 +3700,7 @@ static int amstream_probe(struct platform_device *pdev)
 
 	/*prealloc fetch buf to avoid no continue buffer later...*/
 	stbuf_fetch_init();
+	REG_PATH_CONFIGS("media.amports", amports_configs);
 	return 0;
 
 	/*

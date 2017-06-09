@@ -35,6 +35,7 @@
 #include <linux/amlogic/amports/vframe_receiver.h>
 #include <linux/amlogic/amports/ionvideo_ext.h>
 #include <linux/amlogic/amports/vfm_ext.h>
+#include <linux/amlogic/codec_mm/configs.h>
 
 #include "vdec_reg.h"
 #include "vdec.h"
@@ -60,6 +61,7 @@
 #include "vdec_input.h"
 
 #include "arch/clk.h"
+#include "arch/secprot.h"
 #include <linux/reset.h>
 #include <linux/amlogic/cpu_version.h>
 #include <linux/amlogic/codec_mm/codec_mm.h>
@@ -105,9 +107,6 @@ struct vdec_core_s {
 	struct vdec_s *active_vdec;
 	struct platform_device *vdec_core_platform_device;
 	struct device *cma_dev;
-	unsigned long mem_start;
-	unsigned long mem_end;
-
 	struct semaphore sem;
 	struct task_struct *thread;
 
@@ -273,28 +272,6 @@ static const char * const vdec_device_name[] = {
 	"amvdec_vp9",        "ammvdec_vp9"
 };
 
-static int vdec_default_buf_size[] = {
-	32, 32, /*"amvdec_mpeg12",*/
-	32, 0,  /*"amvdec_mpeg4",*/
-	48, 0,  /*"amvdec_h264",*/
-	32, 32, /*"amvdec_mjpeg",*/
-	32, 32, /*"amvdec_real",*/
-	32, 32, /*"amjpegdec",*/
-	32, 32, /*"amvdec_vc1",*/
-	32, 32, /*"amvdec_avs",*/
-	32, 32, /*"amvdec_yuv",*/
-	64, 64, /*"amvdec_h264mvc",*/
-	64, 64, /*"amvdec_h264_4k2k", else alloc on decoder*/
-	48, 48, /*"amvdec_h265", else alloc on decoder*/
-	0, 0,   /* avs encoder */
-	0, 0,   /* jpg encoder */
-#ifdef VP9_10B_MMU
-	24, 24, /*"amvdec_vp9", else alloc on decoder*/
-#else
-	32, 32,
-#endif
-	0
-};
 
 #else
 
@@ -316,27 +293,6 @@ static const char * const vdec_device_name[] = {
 	"amvdec_vp9"
 };
 
-static int vdec_default_buf_size[] = {
-	32, /*"amvdec_mpeg12",*/
-	32, /*"amvdec_mpeg4",*/
-	48, /*"amvdec_h264",*/
-	32, /*"amvdec_mjpeg",*/
-	32, /*"amvdec_real",*/
-	32, /*"amjpegdec",*/
-	32, /*"amvdec_vc1",*/
-	32, /*"amvdec_avs",*/
-	32, /*"amvdec_yuv",*/
-	64, /*"amvdec_h264mvc",*/
-	64, /*"amvdec_h264_4k2k", else alloc on decoder*/
-	48, /*"amvdec_h265", else alloc on decoder*/
-	0,  /* avs encoder */
-	0,  /* jpg encoder */
-#ifdef VP9_10B_MMU
-	24, /*"amvdec_vp9", else alloc on decoder*/
-#else
-	32,
-#endif
-};
 #endif
 
 int vdec_set_decinfo(struct vdec_s *vdec, struct dec_sysinfo *p)
@@ -355,7 +311,7 @@ struct vdec_s *vdec_create(struct stream_port_s *port,
 	struct vdec_s *vdec;
 	int type = VDEC_TYPE_SINGLE;
 
-	if (port->type & PORT_TYPE_DECODER_SCHED)
+	if (is_mult_inc(port->type))
 		type = (port->type & PORT_TYPE_FRAME) ?
 			VDEC_TYPE_FRAME_BLOCK :
 			VDEC_TYPE_STREAM_PARSER;
@@ -418,6 +374,7 @@ int vdec_set_pts(struct vdec_s *vdec, u32 pts)
 int vdec_set_pts64(struct vdec_s *vdec, u64 pts64)
 {
 	vdec->pts64 = pts64;
+	vdec->pts = (u32)div64_u64(pts64 * 9, 100);
 	vdec->pts_valid = true;
 
 	trace_vdec_set_pts64(vdec, pts64);
@@ -475,13 +432,13 @@ static void vdec_sync_input_read(struct vdec_s *vdec)
 				other =
 				vdec_get_associate(vdec)->input.swap_rp;
 				if (me > other) {
-					WRITE_MPEG_REG(PARSER_VIDEO_RP,
+					WRITE_PARSER_REG(PARSER_VIDEO_RP,
 						vdec_get_associate(vdec)->
 						input.swap_rp);
 					return;
 				}
 			}
-			WRITE_MPEG_REG(PARSER_VIDEO_RP,
+			WRITE_PARSER_REG(PARSER_VIDEO_RP,
 				READ_VREG(VLD_MEM_VIFIFO_RP));
 		} else if (vdec->input.target == VDEC_INPUT_TARGET_HEVC) {
 			me = READ_VREG(HEVC_SHIFT_BYTE_COUNT);
@@ -490,20 +447,20 @@ static void vdec_sync_input_read(struct vdec_s *vdec)
 				me += 1ULL << 32;
 			other = vdec_get_associate(vdec)->input.streaming_rp;
 			if (me > other) {
-				WRITE_MPEG_REG(PARSER_VIDEO_RP,
+				WRITE_PARSER_REG(PARSER_VIDEO_RP,
 					vdec_get_associate(vdec)->
 					input.swap_rp);
 				return;
 			}
 
-			WRITE_MPEG_REG(PARSER_VIDEO_RP,
+			WRITE_PARSER_REG(PARSER_VIDEO_RP,
 				READ_VREG(HEVC_STREAM_RD_PTR));
 		}
 	} else if (vdec->input.target == VDEC_INPUT_TARGET_VLD) {
-		WRITE_MPEG_REG(PARSER_VIDEO_RP,
+		WRITE_PARSER_REG(PARSER_VIDEO_RP,
 			READ_VREG(VLD_MEM_VIFIFO_RP));
 	} else if (vdec->input.target == VDEC_INPUT_TARGET_HEVC) {
-		WRITE_MPEG_REG(PARSER_VIDEO_RP,
+		WRITE_PARSER_REG(PARSER_VIDEO_RP,
 			READ_VREG(HEVC_STREAM_RD_PTR));
 	}
 }
@@ -515,10 +472,10 @@ static void vdec_sync_input_write(struct vdec_s *vdec)
 
 	if (vdec->input.target == VDEC_INPUT_TARGET_VLD) {
 		WRITE_VREG(VLD_MEM_VIFIFO_WP,
-			READ_MPEG_REG(PARSER_VIDEO_WP));
+			READ_PARSER_REG(PARSER_VIDEO_WP));
 	} else if (vdec->input.target == VDEC_INPUT_TARGET_HEVC) {
 		WRITE_VREG(HEVC_STREAM_WR_PTR,
-			READ_MPEG_REG(PARSER_VIDEO_WP));
+			READ_PARSER_REG(PARSER_VIDEO_WP));
 	}
 }
 
@@ -544,7 +501,7 @@ int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p)
 		WRITE_VREG(DOS_SW_RESET0, (1<<5) | (1<<4) | (1<<3));
 		WRITE_VREG(DOS_SW_RESET0, 0);
 
-		dummy = READ_MPEG_REG(RESET0_REGISTER);
+		dummy = READ_RESET_REG(RESET0_REGISTER);
 		WRITE_VREG(POWER_CTL_VLD, 1 << 4);
 	} else if (input->target == VDEC_INPUT_TARGET_HEVC) {
 #if 0
@@ -720,6 +677,8 @@ int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p)
 				vdec_sync_input_write(vdec);
 
 				wp = READ_VREG(HEVC_STREAM_WR_PTR);
+
+				/*pr_info("vdec: restore context\r\n");*/
 			}
 
 		} else {
@@ -738,7 +697,7 @@ int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p)
 				WRITE_VREG(VLD_MEM_VIFIFO_BUF_CNTL, 2);
 				WRITE_VREG(VLD_MEM_VIFIFO_RP, input->start);
 				WRITE_VREG(VLD_MEM_VIFIFO_WP,
-					READ_MPEG_REG(PARSER_VIDEO_WP));
+					READ_PARSER_REG(PARSER_VIDEO_WP));
 
 				rp = READ_VREG(VLD_MEM_VIFIFO_RP);
 
@@ -756,7 +715,7 @@ int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p)
 				WRITE_VREG(HEVC_STREAM_RD_PTR,
 					input->start);
 				WRITE_VREG(HEVC_STREAM_WR_PTR,
-					READ_MPEG_REG(PARSER_VIDEO_WP));
+					READ_PARSER_REG(PARSER_VIDEO_WP));
 
 				rp = READ_VREG(HEVC_STREAM_RD_PTR);
 				wp = READ_VREG(HEVC_STREAM_WR_PTR);
@@ -831,10 +790,10 @@ bool vdec_has_more_input(struct vdec_s *vdec)
 	else {
 		if (input->target == VDEC_INPUT_TARGET_VLD)
 			return READ_VREG(VLD_MEM_VIFIFO_WP) !=
-				READ_MPEG_REG(PARSER_VIDEO_WP);
+				READ_PARSER_REG(PARSER_VIDEO_WP);
 		else {
 			return (READ_VREG(HEVC_STREAM_WR_PTR) & ~0x3) !=
-				(READ_MPEG_REG(PARSER_VIDEO_WP) & ~0x3);
+				(READ_PARSER_REG(PARSER_VIDEO_WP) & ~0x3);
 		}
 	}
 }
@@ -989,6 +948,8 @@ void vdec_save_input_context(struct vdec_s *vdec)
 		}
 
 		input->swap_valid = true;
+		input->swap_needed = false;
+		/*pr_info("vdec: save context\r\n");*/
 
 		vdec_sync_input_read(vdec);
 
@@ -996,8 +957,8 @@ void vdec_save_input_context(struct vdec_s *vdec)
 			struct vdec_s *master = (vdec->slave) ?
 				vdec : vdec->master;
 			master->input.last_swap_slave = (master->slave == vdec);
-			pr_info("master->input.last_swap_slave = %d\n",
-				master->input.last_swap_slave);
+			/* pr_info("master->input.last_swap_slave = %d\n",
+				master->input.last_swap_slave); */
 		}
 	}
 }
@@ -1015,6 +976,37 @@ void vdec_clean_input(struct vdec_s *vdec)
 			break;
 	}
 	vdec_save_input_context(vdec);
+}
+
+int vdec_sync_input(struct vdec_s *vdec)
+{
+	struct vdec_input_s *input = &vdec->input;
+	u32 rp = 0, wp = 0, fifo_len = 0;
+	int size;
+
+	vdec_sync_input_read(vdec);
+	vdec_sync_input_write(vdec);
+	if (input->target == VDEC_INPUT_TARGET_VLD) {
+		rp = READ_VREG(VLD_MEM_VIFIFO_RP);
+		wp = READ_VREG(VLD_MEM_VIFIFO_WP);
+
+	} else if (input->target == VDEC_INPUT_TARGET_HEVC) {
+		rp = READ_VREG(HEVC_STREAM_RD_PTR);
+		wp = READ_VREG(HEVC_STREAM_WR_PTR);
+		fifo_len = (READ_VREG(HEVC_STREAM_FIFO_CTL)
+				>> 16) & 0x7f;
+	}
+	if (wp >= rp)
+		size = wp - rp + fifo_len;
+	else
+		size = wp + input->size - rp + fifo_len;
+	if (size < 0) {
+		pr_info("%s error: input->size %x wp %x rp %x fifo_len %x => size %x\r\n",
+			__func__, input->size, wp, rp, fifo_len, size);
+		size = 0;
+	}
+	return size;
+
 }
 
 const char *vdec_status_str(struct vdec_s *vdec)
@@ -1182,24 +1174,9 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k)
 {
 	int r = 0;
 	struct vdec_s *p = vdec;
-	int more_buffers = 0;
 	const char *dev_name;
-	int tvp_flags;
-	tvp_flags = codec_mm_video_tvp_enabled() ?
-		CODEC_MM_FLAGS_TVP : 0;
-	/*TODO.changed to vdec-tvp flags*/
-
-	if (is_4k && vdec->format < VFORMAT_H264) {
-		/*old decoder don't support 4k
-			but size is bigger;
-			clear 4k flag, and used more buffers;
-		*/
-		more_buffers = 1;
-		is_4k = 0;
-	}
 
 	dev_name = get_dev_name(vdec_single(vdec), vdec->format);
-
 	if (dev_name == NULL)
 		return -ENODEV;
 
@@ -1219,35 +1196,6 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k)
 		}
 	}
 
-	if (vdec_single(vdec) &&
-		((vdec->format == VFORMAT_H264_4K2K) ||
-		(vdec->format == VFORMAT_HEVC && is_4k))) {
-		try_free_keep_video(0);
-	}
-
-	/*when blackout_policy was set, vdec would not free cma buffer, if
-		current vformat require larger buffer size than current
-		buf size, reallocated it
-	*/
-	if (vdec_single(vdec) &&
-		((vdec_core->mem_start != vdec_core->mem_end &&
-			vdec_core->mem_end - vdec_core->mem_start + 1 <
-			vdec_default_buf_size[vdec->format] * SZ_1M))) {
-#ifdef CONFIG_MULTI_DEC
-		pr_info("current vdec size %ld, vformat %d need size %d\n",
-			vdec_core->mem_end - vdec_core->mem_start,
-			vdec->format,
-			vdec_default_buf_size[vdec->format * 2] * SZ_1M);
-#else
-		pr_info("current vdec size %ld, vformat %d need size %d\n",
-			vdec_core->mem_end - vdec_core->mem_start,
-			vdec->format,
-			vdec_default_buf_size[vdec->format] * SZ_1M);
-#endif
-		try_free_keep_video(0);
-		vdec_free_cmabuf();
-	}
-
 	mutex_lock(&vdec_mutex);
 	inited_vcodec_num++;
 	mutex_unlock(&vdec_mutex);
@@ -1263,99 +1211,6 @@ s32 vdec_init(struct vdec_s *vdec, int is_4k)
 	/* todo */
 	if (!vdec_dual(vdec))
 		p->use_vfm_path = vdec_stream_based(vdec);
-
-	if (vdec_single(vdec)) {
-		pr_info("vdec_dev_reg.mem[0x%lx -- 0x%lx]\n",
-			vdec_core->mem_start,
-			vdec_core->mem_end);
-		p->mem_start = vdec_core->mem_start;
-		p->mem_end = vdec_core->mem_end;
-	}
-
-	/* allocate base memory for decoder instance */
-	while ((p->mem_start == p->mem_end) && (vdec_single(vdec))) {
-		int alloc_size;
-
-#ifdef CONFIG_MULTI_DEC
-		alloc_size =
-			vdec_default_buf_size[vdec->format * 2]
-			* SZ_1M;
-#else
-		alloc_size = vdec_default_buf_size[vdec->format] * SZ_1M;
-#endif
-		if (alloc_size == 0)
-			break;/*alloc end*/
-		if (is_4k) {
-			/*used 264 4k's setting for 265.*/
-#ifdef CONFIG_MULTI_DEC
-			int m4k_size =
-				vdec_default_buf_size[VFORMAT_H264_4K2K * 2] *
-				SZ_1M;
-#else
-			int m4k_size =
-				vdec_default_buf_size[VFORMAT_H264_4K2K] *
-				SZ_1M;
-#endif
-			if (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXTVBB)
-				m4k_size = 32 * SZ_1M;
-			if ((m4k_size > 0) && (m4k_size < 200 * SZ_1M))
-				alloc_size = m4k_size;
-
-#ifdef VP9_10B_MMU
-			if ((vdec->format == VFORMAT_VP9) &&
-				(get_cpu_type() >= MESON_CPU_MAJOR_ID_GXL)) {
-#ifdef CONFIG_MULTI_DEC
-				if (p->use_vfm_path)
-					alloc_size =
-					vdec_default_buf_size[VFORMAT_VP9 * 2]
-					* SZ_1M;
-				else
-					alloc_size =
-					vdec_default_buf_size[VFORMAT_VP9
-						* 2 + 1] * SZ_1M;
-
-#else
-				alloc_size =
-				vdec_default_buf_size[VFORMAT_VP9] * SZ_1M;
-#endif
-			}
-#endif
-		} else if (more_buffers) {
-			alloc_size = alloc_size + 16 * SZ_1M;
-		}
-
-		if ((vdec->format == VFORMAT_HEVC)
-			&& get_mmu_mode()
-			&& (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXL)) {
-#ifdef CONFIG_MULTI_DEC
-				if (p->use_vfm_path)
-					alloc_size = 33 * SZ_1M;
-				else
-					alloc_size = 33 * SZ_1M;
-#else
-				alloc_size = 33 * SZ_1M;
-#endif
-		}
-
-		if ((vdec->format == VFORMAT_H264)
-			&& (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXL)
-			&& codec_mm_get_total_size() <= 80 * SZ_1M) {
-#ifdef CONFIG_MULTI_DEC
-			if (p->use_vfm_path)
-				alloc_size = 32 * SZ_1M;
-			else
-				alloc_size = 32 * SZ_1M;
-#else
-			alloc_size = 32 * SZ_1M;
-#endif
-		}
-
-		p->alloc_mem_size = alloc_size;
-		break;/*alloc end*/
-	}
-
-
-/*alloc end:*/
 	/* vdec_dev_reg.flag = 0; */
 
 	p->dev = platform_device_register_data(
@@ -1537,20 +1392,14 @@ void vdec_release(struct vdec_s *vdec)
 		 * instance reserved for legacy path.
 		 */
 #ifdef CONFIG_AMLOGIC_IONVIDEO
-		ionvideo_release_map(vdec->vf_receiver_inst);
+		if (vdec->frame_base_video_path == FRAME_BASE_PATH_IONVIDEO
+				&& vdec_frame_based(vdec)) {
+			ionvideo_release_map(vdec->vf_receiver_inst);
+		}
 #endif
 	}
 
 	platform_device_unregister(vdec->dev);
-
-	if (!vdec->use_vfm_path) {
-		if (vdec->mem_start) {
-			codec_mm_free_for_dma(MEM_NAME, vdec->mem_start);
-			vdec->mem_start = 0;
-			vdec->mem_end = 0;
-		}
-	}
-
 	vdec_destroy(vdec);
 
 	mutex_lock(&vdec_mutex);
@@ -1715,8 +1564,8 @@ static inline bool vdec_ready_to_run(struct vdec_s *vdec)
 	if (input && input_stream_based(input) && !input->eos) {
 		u32 rp, wp, level;
 
-		rp = READ_MPEG_REG(PARSER_VIDEO_RP);
-		wp = READ_MPEG_REG(PARSER_VIDEO_WP);
+		rp = READ_PARSER_REG(PARSER_VIDEO_RP);
+		wp = READ_PARSER_REG(PARSER_VIDEO_WP);
 		if (wp < rp)
 			level = input->size + wp - rp;
 		else
@@ -1747,6 +1596,25 @@ static inline bool vdec_ready_to_run(struct vdec_s *vdec)
 #endif
 
 	return r;
+}
+
+/*
+ * Set up secure protection for each decoder instance running.
+ * Note: The operation from REE side only resets memory access
+ * to a default policy and even a non_secure type will still be
+ * changed to secure type automatically when secure source is
+ * detected inside TEE.
+ */
+static inline void vdec_prepare_run(struct vdec_s *vdec)
+{
+	struct vdec_input_s *input = &vdec->input;
+	int type = (vdec_secure(vdec)) ? DMC_DEV_TYPE_SECURE :
+			DMC_DEV_TYPE_NON_SECURE;
+
+	if (input->target == VDEC_INPUT_TARGET_VLD)
+		tee_config_device_secure(DMC_DEV_ID_VDEC, type);
+	else if (input->target == VDEC_INPUT_TARGET_HEVC)
+		tee_config_device_secure(DMC_DEV_ID_HEVC, type);
 }
 
 /* struct vdec_core_shread manages all decoder instance in active list. When
@@ -1873,6 +1741,8 @@ static int vdec_core_thread(void *data)
 #ifdef CONFIG_MULTI_DEC
 			vdec_profile(vdec, VDEC_PROFILE_EVENT_RUN);
 #endif
+			vdec_prepare_run(vdec);
+
 			vdec->run(vdec, vdec_callback, core);
 		}
 
@@ -2386,24 +2256,6 @@ int hevc_source_changed(int format, int width, int height, int fps)
 	on_setting = 0;
 
 	return ret;
-}
-
-static enum vdec2_usage_e vdec2_usage = USAGE_NONE;
-void set_vdec2_usage(enum vdec2_usage_e usage)
-{
-	if (has_vdec2()) {
-		mutex_lock(&vdec_mutex);
-		vdec2_usage = usage;
-		mutex_unlock(&vdec_mutex);
-	}
-}
-
-enum vdec2_usage_e get_vdec2_usage(void)
-{
-	if (has_vdec2())
-		return vdec2_usage;
-	else
-		return 0;
 }
 
 static struct am_reg am_risc[] = {
@@ -2991,19 +2843,6 @@ static int vdec_probe(struct platform_device *pdev)
 		/* set vdec dmc request to urgent */
 		WRITE_DMCREG(DMC_AM5_CHAN_CTRL, 0x3f203cf);
 	}
-	if (codec_mm_get_reserved_size() >= 48 * SZ_1M
-		&& codec_mm_get_reserved_size() <=  96 * SZ_1M) {
-#ifdef CONFIG_MULTI_DEC
-		vdec_default_buf_size[VFORMAT_H264_4K2K * 2] =
-			codec_mm_get_reserved_size() / SZ_1M;
-#else
-		vdec_default_buf_size[VFORMAT_H264_4K2K] =
-			codec_mm_get_reserved_size() / SZ_1M;
-#endif
-
-		/*all reserved size for prealloc*/
-	}
-
 	INIT_LIST_HEAD(&vdec_core->connected_vdec_list);
 	spin_lock_init(&vdec_core->lock);
 
@@ -3042,6 +2881,15 @@ static const struct of_device_id amlogic_vdec_dt_match[] = {
 	{},
 };
 
+static struct mconfig vdec_configs[] = {
+	MC_PU32("debug_trace_num", &debug_trace_num),
+	MC_PI32("hevc_max_reset_count", &hevc_max_reset_count),
+	MC_PU32("clk_config", &clk_config),
+	MC_PI32("step_mode", &step_mode),
+	MC_PI32("poweron_clock_level", &poweron_clock_level),
+};
+static struct mconfig_node vdec_node;
+
 static struct platform_driver vdec_driver = {
 	.probe = vdec_probe,
 	.remove = vdec_remove,
@@ -3057,7 +2905,8 @@ static int __init vdec_module_init(void)
 		pr_info("failed to register vdec module\n");
 		return -ENODEV;
 	}
-
+	INIT_REG_NODE_CONFIGS("media.decoder", &vdec_node,
+		"vdec", vdec_configs, CONFIG_FOR_RW);
 	return 0;
 }
 
@@ -3069,13 +2918,6 @@ static void __exit vdec_module_exit(void)
 
 static int vdec_mem_device_init(struct reserved_mem *rmem, struct device *dev)
 {
-	unsigned long start, end;
-	start = rmem->base;
-	end = rmem->base + rmem->size - 1;
-	pr_info("init vdec memsource %lx->%lx\n", start, end);
-
-	vdec_core->mem_start = start;
-	vdec_core->mem_end = end;
 	vdec_core->cma_dev = dev;
 
 	return 0;

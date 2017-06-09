@@ -32,6 +32,7 @@
 #include <linux/workqueue.h>
 #include <linux/dma-mapping.h>
 #include <linux/atomic.h>
+#include <linux/amlogic/codec_mm/configs.h>
 
 #include <linux/module.h>
 #include <linux/amlogic/codec_mm/codec_mm.h>
@@ -1188,12 +1189,12 @@ static void H264_DECODE_INIT(void)
 	READ_VREG(DOS_SW_RESET0);
 
 #else
-	WRITE_MPEG_REG(RESET0_REGISTER,
+	WRITE_RESET_REG(RESET0_REGISTER,
 				   RESET_IQIDCT | RESET_MC | RESET_VLD_PART);
-	READ_MPEG_REG(RESET0_REGISTER);
-	WRITE_MPEG_REG(RESET0_REGISTER,
+	READ_RESET_REG(RESET0_REGISTER);
+	WRITE_RESET_REG(RESET0_REGISTER,
 				   RESET_IQIDCT | RESET_MC | RESET_VLD_PART);
-	WRITE_MPEG_REG(RESET2_REGISTER, RESET_PIC_DC | RESET_DBLK);
+	WRITE_RESET_REG(RESET2_REGISTER, RESET_PIC_DC | RESET_DBLK);
 #endif
 
 	/* Wait for some time for RESET */
@@ -1293,7 +1294,7 @@ static void vh264mvc_prot_init(void)
 	READ_VREG(DOS_SW_RESET0);
 
 #else
-	WRITE_MPEG_REG(RESET0_REGISTER, 0x80);	/* RESET MCPU */
+	WRITE_RESET_REG(RESET0_REGISTER, 0x80);	/* RESET MCPU */
 #endif
 
 	WRITE_VREG(MAILBOX_COMMAND, 0);
@@ -1650,6 +1651,15 @@ static struct codec_profile_t amvdec_hmvc_profile = {
 	.name = "hmvc",
 	.profile = ""
 };
+static struct mconfig h264mvc_configs[] = {
+	MC_PU32("stat", &stat),
+	MC_PU32("dbg_mode", &dbg_mode),
+	MC_PU32("view_mode", &view_mode),
+	MC_PU32("dbg_cmd", &dbg_cmd),
+	MC_PU32("drop_rate", &drop_rate),
+	MC_PU32("drop_thread_hold", &drop_thread_hold),
+};
+static struct mconfig_node h264mvc_node;
 
 static int __init amvdec_h264mvc_driver_init_module(void)
 {
@@ -1661,7 +1671,8 @@ static int __init amvdec_h264mvc_driver_init_module(void)
 	}
 
 	vcodec_profile_register(&amvdec_hmvc_profile);
-
+	INIT_REG_NODE_CONFIGS("media.decoder", &h264mvc_node,
+		"h264mvc", h264mvc_configs, CONFIG_FOR_RW);
 	return 0;
 }
 

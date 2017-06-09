@@ -178,6 +178,10 @@ static unsigned int vdin_reset_flag1;
 module_param(vdin_reset_flag1, uint, 0664);
 MODULE_PARM_DESC(vdin_reset_flag1, "vdin_reset_flag1");
 
+static unsigned int dv_work_delby;
+module_param(dv_work_delby, uint, 0664);
+MODULE_PARM_DESC(dv_work_delby, "dv_work_delby");
+
 /*
  *2:enable manul rdam
  *1:enable auto rdma
@@ -369,6 +373,7 @@ static const struct vframe_operations_s vdin_vf_ops = {
 	.peek = vdin_vf_peek,
 	.get  = vdin_vf_get,
 	.put  = vdin_vf_put,
+	.event_cb = vdin_event_cb,
 	.vf_states = vdin_vf_states,
 };
 
@@ -442,7 +447,8 @@ unsigned int vdin_cma_alloc(struct vdin_dev_s *devp)
 	if ((devp->format_convert >= VDIN_FORMAT_CONVERT_YUV_NV12) ||
 		(devp->format_convert <= VDIN_FORMAT_CONVERT_RGB_NV21))
 		mem_size = (mem_size * 3)/2;
-	mem_size = PAGE_ALIGN(mem_size)*max_bufffer_num;
+	mem_size = PAGE_ALIGN(mem_size) * max_buf_num +
+		dolby_size_byte * max_buf_num;
 	mem_size = (mem_size/PAGE_SIZE + 1)*PAGE_SIZE;
 	if (mem_size > devp->cma_mem_size[devp->index])
 		mem_size = devp->cma_mem_size[devp->index];
@@ -973,7 +979,7 @@ void vdin_start_dec(struct vdin_dev_s *devp)
 	vdin_set_decimation(devp);
 	vdin_set_cutwin(devp);
 	vdin_set_hvscale(devp);
-	if (cpu_after_eq(MESON_CPU_MAJOR_ID_GXTVBB))
+	if (is_meson_gxtvbb_cpu() || is_meson_txl_cpu() || is_meson_txlx_cpu())
 		vdin_set_bitdepth(devp);
 	/* txl new add fix for hdmi switch resolution cause cpu holding */
 	if (get_cpu_type() >= MESON_CPU_MAJOR_ID_TXL)
@@ -1015,7 +1021,14 @@ void vdin_start_dec(struct vdin_dev_s *devp)
 
 	devp->vfp->size = devp->canvas_max_num;
 	vf_pool_init(devp->vfp, devp->vfp->size);
+	vdin_hdmiin_patch(devp);/*must place before vf init*/
 	vdin_vf_init(devp);
+	if (devp->dv_flag || (dolby_input & (1 << devp->index))) {
+		/* config dolby mem base */
+		vdin_dolby_addr_alloc(devp, devp->vfp->size);
+		/* config dolby vision */
+		vdin_dolby_config(devp);
+	}
 
 	devp->abnormal_cnt = 0;
 	devp->last_wr_vfe = NULL;
@@ -1055,7 +1068,12 @@ void vdin_start_dec(struct vdin_dev_s *devp)
 
 	/* register provider, so the receiver can get the valid vframe */
 	udelay(start_provider_delay);
-	vf_reg_provider(&devp->vprov);
+#if 1/*def CONFIG_AM_HDMIIN_DV*/
+	if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+		vf_reg_provider(&devp->vprov_dv);
+	else
+#endif
+		vf_reg_provider(&devp->vprov);
 	if (vf_get_receiver_name(devp->name)) {
 		if (strcmp(vf_get_receiver_name(devp->name), "deinterlace")
 				== 0)
@@ -1063,8 +1081,12 @@ void vdin_start_dec(struct vdin_dev_s *devp)
 		else
 			devp->send2di = false;
 	}
-
-	vf_notify_receiver(devp->name, VFRAME_EVENT_PROVIDER_START, NULL);
+	if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+		vf_notify_receiver("dv_vdin",
+			VFRAME_EVENT_PROVIDER_START, NULL);
+	else
+		vf_notify_receiver(devp->name,
+			VFRAME_EVENT_PROVIDER_START, NULL);
 	if ((devp->parm.port != TVIN_PORT_VIU) ||
 		(viu_hw_irq != 0)) {
 		/*enable irq */
@@ -1125,10 +1147,18 @@ void vdin_stop_dec(struct vdin_dev_s *devp)
 
 	/* reset default canvas  */
 	vdin_set_def_wr_canvas(devp);
-	vf_unreg_provider(&devp->vprov);
+#if 1/*def CONFIG_AM_HDMIIN_DV*/
+	if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+		vf_unreg_provider(&devp->vprov_dv);
+	else
+#endif
+		vf_unreg_provider(&devp->vprov);
+	devp->dv_config = 0;
 #ifdef CONFIG_CMA
 	vdin_cma_release(devp);
 #endif
+	vdin_dolby_addr_release(devp, devp->vfp->size);
+
 
 #ifdef CONFIG_AML_VPU
 	switch_vpu_mem_pd_vmod(devp->addr_offset?VPU_VIU_VDIN1:VPU_VIU_VDIN0,
@@ -1746,24 +1776,28 @@ irqreturn_t vdin_isr(int irq, void *dev_id)
 		/* debug for video latency */
 		devp->last_wr_vfe->vf.ready_jiffies64 = jiffies_64;
 		provider_vf_put(devp->last_wr_vfe, devp->vfp);
-		#if 0
-		/* prepare for next input data */
-		if (provider_vf_peek(devp->vfp) != NULL) {
-			curr_wr_vfe = provider_vf_get(devp->vfp);
-			vdin_set_canvas_id(devp,
-				(devp->flags&VDIN_FLAG_RDMA_ENABLE),
-				(curr_wr_vfe->vf.canvas0Addr&0xff));
-			/* prepare for chroma canvas*/
-			if ((devp->prop.dest_cfmt == TVIN_NV12) ||
-				(devp->prop.dest_cfmt == TVIN_NV21))
-				vdin_set_chma_canvas_id(devp,
-					(devp->flags&VDIN_FLAG_RDMA_ENABLE),
-					(curr_wr_vfe->vf.canvas0Addr>>8)&0xff);
-			devp->curr_wr_vfe = curr_wr_vfe;
+		if ((devp->parm.port >= TVIN_PORT_HDMI0) &&
+			(devp->parm.port <= TVIN_PORT_HDMI7))
+			vdin_vf_disp_mode_update(devp->last_wr_vfe, devp->vfp);
+		if (dv_dbg_mask & DV_UPDATE_DATA_MODE_DELBY_WORK
+			&& devp->dv_config) {
+			/* prepare for dolby vision metadata addr */
+			devp->dv_cur_index = devp->last_wr_vfe->vf.index;
+			devp->dv_next_index = devp->curr_wr_vfe->vf.index;
+			schedule_delayed_work(&devp->dv_dwork, dv_work_delby);
+		} else if (((dv_dbg_mask & DV_UPDATE_DATA_MODE_DELBY_WORK) == 0)
+			&& devp->dv_config) {
+			vdin_dolby_buffer_update(devp,
+				devp->last_wr_vfe->vf.index);
+			vdin_dolby_addr_update(devp,
+				devp->curr_wr_vfe->vf.index);
 		}
-		#endif
 		devp->last_wr_vfe = NULL;
-		vf_notify_receiver(devp->name,
+		if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+			vf_notify_receiver("dv_vdin",
+				VFRAME_EVENT_PROVIDER_VFRAME_READY, NULL);
+		else
+			vf_notify_receiver(devp->name,
 				VFRAME_EVENT_PROVIDER_VFRAME_READY, NULL);
 	}
 	/*check vs is valid base on the time during continuous vs*/
@@ -1845,6 +1879,9 @@ irqreturn_t vdin_isr(int irq, void *dev_id)
 
 	decops = devp->frontend->dec_ops;
 	if (decops->decode_isr(devp->frontend, devp->hcnt64) == TVIN_BUF_SKIP) {
+		if ((devp->parm.port >= TVIN_PORT_HDMI0) &&
+			(devp->parm.port <= TVIN_PORT_HDMI7))
+			vdin_vf_disp_mode_skip(devp->vfp);
 		vdin_irq_flag = 8;
 		vdin_drop_cnt++;
 		goto irq_handled;
@@ -1877,7 +1914,11 @@ irqreturn_t vdin_isr(int irq, void *dev_id)
 		vdin_drop_cnt++;
 		goto irq_handled;
 	}
-	vdin2nr = vf_notify_receiver(devp->name,
+	if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+		vdin2nr = vf_notify_receiver("dv_vdin",
+			VFRAME_EVENT_PROVIDER_QUREY_VDIN2NR, NULL);
+	else
+		vdin2nr = vf_notify_receiver(devp->name,
 			VFRAME_EVENT_PROVIDER_QUREY_VDIN2NR, NULL);
 	/*if vdin-nr,di must get
 	 * vdin current field type which di pre will read*/
@@ -1941,6 +1982,20 @@ irqreturn_t vdin_isr(int irq, void *dev_id)
 		/* debug for video latency */
 		curr_wr_vfe->vf.ready_jiffies64 = jiffies_64;
 		provider_vf_put(curr_wr_vfe, devp->vfp);
+		if (dv_dbg_mask & DV_UPDATE_DATA_MODE_DELBY_WORK
+			&& devp->dv_config) {
+			/* prepare for dolby vision metadata addr */
+			devp->dv_cur_index = curr_wr_vfe->vf.index;
+			devp->dv_next_index = next_wr_vfe->vf.index;
+			schedule_delayed_work(&devp->dv_dwork, dv_work_delby);
+		} else if (((dv_dbg_mask & DV_UPDATE_DATA_MODE_DELBY_WORK) == 0)
+			&& devp->dv_config) {
+			vdin_dolby_buffer_update(devp, curr_wr_vfe->vf.index);
+			vdin_dolby_addr_update(devp, next_wr_vfe->vf.index);
+		}
+		if ((devp->parm.port >= TVIN_PORT_HDMI0) &&
+			(devp->parm.port <= TVIN_PORT_HDMI7))
+			vdin_vf_disp_mode_update(curr_wr_vfe, devp->vfp);
 	}
 	/* prepare for next input data */
 	next_wr_vfe = provider_vf_get(devp->vfp);
@@ -1952,10 +2007,16 @@ irqreturn_t vdin_isr(int irq, void *dev_id)
 		vdin_set_chma_canvas_id(devp,
 			(devp->flags&VDIN_FLAG_RDMA_ENABLE),
 			(next_wr_vfe->vf.canvas0Addr>>8)&0xff);
+
 	devp->curr_wr_vfe = next_wr_vfe;
-	if (!(devp->flags&VDIN_FLAG_RDMA_ENABLE))
-		vf_notify_receiver(devp->name,
-			VFRAME_EVENT_PROVIDER_VFRAME_READY, NULL);
+	if (!(devp->flags&VDIN_FLAG_RDMA_ENABLE)) {
+		if (devp->dv_flag || (dolby_input & (1 << devp->index)))
+			vf_notify_receiver("dv_vdin",
+				VFRAME_EVENT_PROVIDER_VFRAME_READY, NULL);
+		else
+			vf_notify_receiver(devp->name,
+				VFRAME_EVENT_PROVIDER_VFRAME_READY, NULL);
+	}
 
 irq_handled:
 	spin_unlock_irqrestore(&devp->isr_lock, flags);
@@ -1996,6 +2057,8 @@ irqreturn_t vdin_v4l2_isr(int irq, void *dev_id)
 		vdin_reset_flag1 = 0;
 		return IRQ_HANDLED;
 	}
+	if (!(devp->flags & VDIN_FLAG_DEC_STARTED))
+		return IRQ_HANDLED;
 	isr_log(devp->vfp);
 	irq_cnt++;
 	spin_lock_irqsave(&devp->isr_lock, flags);
@@ -2154,6 +2217,23 @@ static void vdin_sig_dwork(struct work_struct *work)
 	/* if (vdin_dbg_en) */
 	pr_info("%s, dwork signal status: %d\n",
 			__func__, pre_info->status);
+}
+static void vdin_dv_dwork(struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct vdin_dev_s *devp =
+		container_of(dwork, struct vdin_dev_s, dv_dwork);
+
+	if (!devp || !devp->frontend) {
+		pr_info("%s, dwork error !!!\n", __func__);
+		return;
+	}
+	if (devp->dv_config) {
+		vdin_dolby_buffer_update(devp, devp->dv_cur_index);
+		vdin_dolby_addr_update(devp, devp->dv_next_index);
+	}
+
+	cancel_delayed_work(&devp->dv_dwork);
 }
 
 static int vdin_open(struct inode *inode, struct file *file)
@@ -2857,12 +2937,19 @@ static int vdin_drv_probe(struct platform_device *pdev)
 		pr_err("don't find  match rdma irq, disable rdma\n");
 		vdevp->rdma_irq = 0;
 	}
-	/* after_eq gxtvbb support 10bit mode@20161108 */
-	if (cpu_after_eq(MESON_CPU_MAJOR_ID_GXTVBB)) {
-		ret = of_property_read_u32(pdev->dev.of_node,
-				"tv_bit_mode", &bit_mode);
-		if (ret)
-			pr_info("no bit mode found, set 8bit as default\n");
+	/* vdin0 for tv */
+	if (vdevp->index == 0) {
+		/* only gxtvbb & txl support 10bit mode@20161108 */
+		if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB) ||
+			(get_cpu_type() == MESON_CPU_MAJOR_ID_TXL) ||
+			(get_cpu_type() == MESON_CPU_MAJOR_ID_TXLX)) {
+			ret = of_property_read_u32(pdev->dev.of_node,
+					"tv_bit_mode", &bit_mode);
+			if (ret)
+				pr_info("no bit mode found, set 8bit as default\n");
+		}
+		vdevp->color_depth_support = bit_mode;
+		vdevp->color_depth_config = 0;
 	}
 	vdevp->color_depth_support = bit_mode;
 	vdevp->color_depth_config = 0;
@@ -2916,6 +3003,9 @@ static int vdin_drv_probe(struct platform_device *pdev)
 	/* @todo provider name */
 	sprintf(vdevp->name, "%s%d", PROVIDER_NAME, vdevp->index);
 	vf_provider_init(&vdevp->vprov, vdevp->name, &vdin_vf_ops, vdevp->vfp);
+#if 1/*def CONFIG_AM_HDMIIN_DV*/
+	vf_provider_init(&vdevp->vprov_dv, "dv_vdin", &vdin_vf_ops, vdevp->vfp);
+#endif
 	/* @todo canvas_config_mode */
 	if (canvas_config_mode == 0 || canvas_config_mode == 1)
 		vdin_canvas_init(vdevp);
@@ -2986,6 +3076,7 @@ static int vdin_drv_probe(struct platform_device *pdev)
 	}
 	vdevp->sig_wq = create_singlethread_workqueue(vdevp->name);
 	INIT_DELAYED_WORK(&vdevp->sig_dwork, vdin_sig_dwork);
+	INIT_DELAYED_WORK(&vdevp->dv_dwork, vdin_dv_dwork);
 
 	vdevp->sig_sdev.name = vdevp->name;
 	ret = switch_dev_register(&vdevp->sig_sdev);

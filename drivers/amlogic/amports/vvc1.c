@@ -120,7 +120,8 @@ static int cur_pool_idx;
 static s32 vfbuf_use[DECODE_BUFFER_NUM_MAX];
 static struct timer_list recycle_timer;
 static u32 stat;
-static u32 buf_size, buf_offset;
+static u32 buf_size = 32 * 1024 * 1024;
+static u32 buf_offset;
 static u32 avi_flag;
 static u32 keyframe_pts_only;
 static u32 vvc1_ratio;
@@ -850,13 +851,13 @@ static int vvc1_prot_init(void)
 	WRITE_VREG(DOS_SW_RESET0, 0);
 
 #else
-	WRITE_MPEG_REG(RESET0_REGISTER,
+	WRITE_RESET_REG(RESET0_REGISTER,
 				   RESET_IQIDCT | RESET_MC | RESET_VLD_PART);
-	READ_MPEG_REG(RESET0_REGISTER);
-	WRITE_MPEG_REG(RESET0_REGISTER,
+	READ_RESET_REG(RESET0_REGISTER);
+	WRITE_RESET_REG(RESET0_REGISTER,
 				   RESET_IQIDCT | RESET_MC | RESET_VLD_PART);
 
-	WRITE_MPEG_REG(RESET2_REGISTER, RESET_PIC_DC | RESET_DBLK);
+	WRITE_RESET_REG(RESET2_REGISTER, RESET_PIC_DC | RESET_DBLK);
 #endif
 
 	WRITE_VREG(POWER_CTL_VLD, 0x10);
@@ -1109,8 +1110,6 @@ static int amvdec_vc1_probe(struct platform_device *pdev)
 		return -EFAULT;
 	}
 
-	buf_size = pdata->alloc_mem_size;
-
 	if (pdata->sys_info)
 		vvc1_amstream_dec_info = *pdata->sys_info;
 
@@ -1219,10 +1218,6 @@ static void __exit amvdec_vc1_driver_remove_module(void)
 }
 
 /****************************************/
-
-module_param(stat, uint, 0664);
-MODULE_PARM_DESC(stat, "\n amvdec_vc1 stat\n");
-
 module_init(amvdec_vc1_driver_init_module);
 module_exit(amvdec_vc1_driver_remove_module);
 

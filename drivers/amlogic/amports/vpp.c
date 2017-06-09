@@ -305,8 +305,8 @@ static uint coeff(uint *settings, uint ratio, uint phase,
 	}
 	coeff_type = settings[coeff_select];
 	/* TODO: add future TV chips */
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB) ||
-		(get_cpu_type() == MESON_CPU_MAJOR_ID_TXL)) {
+	if (is_meson_gxtvbb_cpu() || is_meson_txl_cpu() ||
+		is_meson_txlx_cpu()) {
 		if (coeff_type == COEF_BICUBIC_SHARP)
 			coeff_type = COEF_BICUBIC;
 	} else {
@@ -403,7 +403,7 @@ static unsigned int super_debug;
 module_param(super_debug, uint, 0664);
 MODULE_PARM_DESC(super_debug, "super_debug");
 
-static unsigned int super_scaler = 1;
+unsigned int super_scaler = 1;
 module_param(super_scaler, uint, 0664);
 MODULE_PARM_DESC(super_scaler, "super_scaler");
 
@@ -577,6 +577,12 @@ calculate_non_linear_ratio(unsigned middle_ratio,
  * (1.25 * 3840 / 1920) for 1080p mode.
  */
 #define MIN_RATIO_1000	1250
+unsigned int cur_skip_ratio;
+MODULE_PARM_DESC(cur_skip_ratio, "cur_skip_ratio");
+module_param(cur_skip_ratio, uint, 0444);
+unsigned int cur_vf_type;
+MODULE_PARM_DESC(cur_vf_type, "cur_vf_type");
+module_param(cur_vf_type, uint, 0444);
 
 static int
 vpp_process_speed_check(s32 width_in,
@@ -586,8 +592,10 @@ vpp_process_speed_check(s32 width_in,
 		struct vpp_frame_par_s *next_frame_par,
 		const struct vinfo_s *vinfo, struct vframe_s *vf)
 {
-	u32 cur_ratio;
+	u32 cur_ratio, bpp = 1;
 	int min_ratio_1000 = 0;
+	if (vf)
+		cur_vf_type = vf->type;
 	if (next_frame_par->vscale_skip_count < force_vskip_cnt)
 		return SPEED_CHECK_VSKIP;
 
@@ -609,13 +617,23 @@ vpp_process_speed_check(s32 width_in,
 			|| (height_screen <= 0))
 			return SPEED_CHECK_DONE;
 
-		if (height_in > height_out) {
+		if ((next_frame_par->vscale_skip_count > 0)
+			&& (vf->type & VIDTYPE_VIU_444))
+			bpp = 2;
+		if (height_in * bpp > height_out) {
 			if (get_cpu_type() >=
 				MESON_CPU_MAJOR_ID_GXBB) {
 				cur_ratio = div_u64((u64)height_in *
 						(u64)vinfo->height *
 						1000,
 						height_out * 2160);
+				/* di process first, need more a bit of ratio */
+				if (vf->type & VIDTYPE_PRE_INTERLACE)
+					cur_ratio = (cur_ratio * 105) / 100;
+				if ((next_frame_par->vscale_skip_count > 0)
+					&& (vf->type & VIDTYPE_VIU_444))
+					cur_ratio = cur_ratio * 2;
+				cur_skip_ratio = cur_ratio;
 				if ((cur_ratio > min_ratio_1000) &&
 				(vf->source_type != VFRAME_SOURCE_TYPE_TUNER) &&
 				(vf->source_type != VFRAME_SOURCE_TYPE_CVBS))
@@ -949,9 +967,9 @@ RESTART:
 
 		ratio_y = (height_after_ratio << 18) / screen_height;
 		if (super_debug)
-			pr_info("height_after_ratio=%d,%d,%d,%d\n",
+			pr_info("height_after_ratio=%d,%d,%d,%d,%d\n",
 				   height_after_ratio, ratio_x, ratio_y,
-				   aspect_factor);
+				   aspect_factor, wide_mode);
 
 		if (wide_mode == VIDEO_WIDEOPTION_NORMAL) {
 			ratio_x = ratio_y = max(ratio_x, ratio_y);
@@ -1138,7 +1156,8 @@ RESTART:
 		(vpp_zoom_center_x << 10)) /
 		ratio_x;
 	end = (w_in << 18) / ratio_x + start - 1;
-	pr_info("left:start =%d,%d,%d,%d  %d,%d,%d\n",
+	if (super_debug)
+		pr_info("left:start =%d,%d,%d,%d  %d,%d,%d\n",
 			start, end, video_left,
 			video_width, w_in, ratio_x, vpp_zoom_center_x);
 #endif
@@ -2422,8 +2441,8 @@ void vpp_set_3d_scale(bool enable)
 
 void vpp_super_scaler_support(void)
 {
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB) ||
-		(get_cpu_type() == MESON_CPU_MAJOR_ID_TXL))
+	if (is_meson_gxtvbb_cpu() || is_meson_txl_cpu() ||
+		is_meson_txlx_cpu())
 		super_scaler = 1;
 	else
 		super_scaler = 0;
@@ -2431,9 +2450,8 @@ void vpp_super_scaler_support(void)
 
 void vpp_bypass_ratio_config(void)
 {
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXBB)
-		|| (get_cpu_type() == MESON_CPU_MAJOR_ID_GXL)
-		|| (get_cpu_type() == MESON_CPU_MAJOR_ID_GXM))
+	if (is_meson_gxbb_cpu() || is_meson_gxl_cpu() ||
+		is_meson_gxm_cpu())
 		bypass_ratio = 125;
 	else
 		bypass_ratio = 205;

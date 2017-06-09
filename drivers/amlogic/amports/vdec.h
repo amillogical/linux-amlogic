@@ -89,15 +89,6 @@ extern s32 vdec_request_irq(enum vdec_irq_num num, irq_handler_t handler,
 	const char *devname, void *dev);
 extern void vdec_free_irq(enum vdec_irq_num num, void *dev);
 
-enum vdec2_usage_e {
-	USAGE_NONE,
-	USAGE_DEC_4K2K,
-	USAGE_ENCODE,
-};
-
-extern void set_vdec2_usage(enum vdec2_usage_e usage);
-extern enum vdec2_usage_e get_vdec2_usage(void);
-
 extern void dma_contiguous_early_fixup(phys_addr_t base, unsigned long size);
 unsigned int get_vdec_clk_config_settings(void);
 void update_vdec_clk_config_settings(unsigned int config);
@@ -156,7 +147,8 @@ struct vdec_s {
 	/* config (temp) */
 	unsigned long mem_start;
 	unsigned long mem_end;
-	unsigned int alloc_mem_size;
+
+	void *mm_blk_handle;
 
 	struct device *cma_dev;
 	struct platform_device *dev;
@@ -255,6 +247,9 @@ extern int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p);
 
 /* clean decoder input */
 extern void vdec_clean_input(struct vdec_s *vdec);
+
+/* sync decoder input */
+extern int vdec_sync_input(struct vdec_s *vdec);
 
 /* enable decoder input */
 extern void vdec_enable_input(struct vdec_s *vdec);
