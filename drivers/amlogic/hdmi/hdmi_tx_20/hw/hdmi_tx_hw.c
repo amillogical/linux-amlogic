@@ -2039,6 +2039,8 @@ next:
 			/* set hsync/vsync */
 			hd_set_reg_bits(P_VPU_HDMI_DITH_CNTL, hs_flag, 2, 2);
 		}
+		/* PQ adjustment: enable noise and no rounding */
+		hd_set_reg_bits(0x3120, 0, 1, 1);
 		/* 12-10 dithering off (10-8 <= GXL) */
 		hd_set_reg_bits(P_VPU_HDMI_FMT_CTRL, 0, 4, 1);
 		/* 12-10 rounding off (10-8 <= GXL) */
