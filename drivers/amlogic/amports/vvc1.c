@@ -296,9 +296,9 @@ static irqreturn_t vvc1_isr(int irq, void *dev_id)
 
 		if (pts_by_offset) {
 			offset = READ_VREG(VC1_OFFSET_REG);
-			if (keyframe_pts_only && (picture_type != I_PICTURE)) {
-				pts_valid = 0;
-			} else if (pts_lookup_offset_us64(PTS_TYPE_VIDEO, offset, &pts, 0, &pts_us64) == 0) {
+			if (pts_lookup_offset_us64(
+					PTS_TYPE_VIDEO,
+					offset, &pts, 0, &pts_us64) == 0) {
 				pts_valid = 1;
 #ifdef DEBUG_PTS
 				pts_hit++;
