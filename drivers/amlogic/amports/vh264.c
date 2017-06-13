@@ -1140,15 +1140,23 @@ static void vh264_set_params(struct work_struct *work)
 					div_u64(96000ULL * 2 *
 							num_units_in_tick,
 							time_scale);
+				if (frame_dur != frame_dur_es) {
+					h264_first_valid_pts_ready = false;
+					h264pts1 = 0;
+					h264pts2 = 0;
+					h264_pts_count = 0;
+					duration_from_pts_done = 0;
+					fixed_frame_rate_flag = 0;
+					frame_dur = frame_dur_es;
+				}
 
 				/* hack to avoid use ES frame duration
-				   when it's half of the rate from
-				   system info */
-				/* sometimes the encoder is given a wrong
+				   when it's half of the rate from system info
+				   sometimes the encoder is given a wrong
 				   frame rate but the system side infomation
-				   is more reliable */
+				   is more reliable
 				if ((frame_dur * 2) != frame_dur_es)
-					frame_dur = frame_dur_es;
+					frame_dur = frame_dur_es; */
 			}
 		}
 	} else
@@ -2348,6 +2356,12 @@ static int vh264_local_init(void)
 				& 0x04) >> 2;
 	max_refer_buf = !(((unsigned long) vh264_amstream_dec_info.param
 				& 0x10) >> 4);
+	if (frame_dur < 96000/960) {
+		/*more than 960fps,it should not be a correct value,
+		give default 30fps*/
+		frame_dur = 96000/30;
+	}
+
 	if (!vh264_reset) {
 		if (mm_blk_handle) {
 			decoder_bmmu_box_free(mm_blk_handle);
