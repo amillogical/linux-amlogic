@@ -217,7 +217,7 @@ enum vbi_state_e {
 	VBI_STATE_GO        = 3,
 	VBI_STATE_DONE      = 4,
 	VBI_STATE_TIMEDOUT  = 5
-} vbi_state_t;
+};
 
 /* ********************
 ************************** */
@@ -248,7 +248,7 @@ struct vbi_ringbuffer_s {
 	unsigned int      data_wmode;
 	wait_queue_head_t queue;
 	spinlock_t        lock;
-} vbi_ringbuffer_t;
+};
 
 struct vbi_slicer_s {
 	enum vbi_slicer_e       type;
@@ -296,5 +296,10 @@ struct vbi_dev_s {
 	struct timer_list		timer;
 	bool			tasklet_enable;
 };
+
+/*1: tvafe clk enable;
+0: tvafe clk disable
+read write cvd acd reg will crash when clk disabled*/
+extern bool tvafe_clk_status;
 
 #endif /* TVIN_VBI_H_ */

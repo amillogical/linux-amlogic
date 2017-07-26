@@ -43,6 +43,8 @@ int hevc_source_changed(int format, int width, int height, int fps);
 
 #define DEC_FLAG_HEVC_WORKAROUND 0x01
 
+#define VDEC_FIFO_ALIGN 8
+
 enum vdec_type_e {
 	VDEC_1 = 0,
 	VDEC_HCODEC,
@@ -80,6 +82,12 @@ enum vdec_irq_num {
 	VDEC_IRQ_2,
 	VDEC_IRQ_MAX,
 };
+
+enum vdec_fr_hint_state {
+	VDEC_NO_NEED_HINT = 0,
+	VDEC_NEED_HINT,
+	VDEC_HINTED,
+};
 extern s32 vdec_request_threaded_irq(enum vdec_irq_num num,
 			irq_handler_t handler,
 			irq_handler_t thread_fn,
@@ -88,15 +96,6 @@ extern s32 vdec_request_threaded_irq(enum vdec_irq_num num,
 extern s32 vdec_request_irq(enum vdec_irq_num num, irq_handler_t handler,
 	const char *devname, void *dev);
 extern void vdec_free_irq(enum vdec_irq_num num, void *dev);
-
-enum vdec2_usage_e {
-	USAGE_NONE,
-	USAGE_DEC_4K2K,
-	USAGE_ENCODE,
-};
-
-extern void set_vdec2_usage(enum vdec2_usage_e usage);
-extern enum vdec2_usage_e get_vdec2_usage(void);
 
 extern void dma_contiguous_early_fixup(phys_addr_t base, unsigned long size);
 unsigned int get_vdec_clk_config_settings(void);
@@ -127,9 +126,14 @@ enum vformat_t;
 
 #define VDEC_PROVIDER_NAME_SIZE 16
 #define VDEC_RECEIVER_NAME_SIZE 16
-#define VDEC_MAP_NAME_SIZE      40
+#define VDEC_MAP_NAME_SIZE      45
 
-#define VDEC_FLAG_INPUT_KEEP_CONTEXT 0x01
+#define VDEC_FLAG_OTHER_INPUT_CONTEXT 0x0
+#define VDEC_FLAG_SELF_INPUT_CONTEXT 0x01
+
+#define VDEC_NEED_MORE_DATA_RUN   0x01
+#define VDEC_NEED_MORE_DATA_DIRTY 0x02
+#define VDEC_NEED_MORE_DATA       0x04
 
 struct vdec_s {
 	u32 magic;
@@ -149,12 +153,15 @@ struct vdec_s {
 	bool pts_valid;
 	int flag;
 	int sched;
+	int need_more_data;
 
 	struct completion inactive_done;
 
 	/* config (temp) */
 	unsigned long mem_start;
 	unsigned long mem_end;
+
+	void *mm_blk_handle;
 
 	struct device *cma_dev;
 	struct platform_device *dev;
@@ -176,6 +183,7 @@ struct vdec_s {
 	char vfm_map_chain[VDEC_MAP_NAME_SIZE];
 	int vf_receiver_inst;
 	enum FRAME_BASE_VIDEO_PATH frame_base_video_path;
+	enum vdec_fr_hint_state fr_hint_state;
 	bool use_vfm_path;
 	char config[PAGE_SIZE];
 	int config_len;
@@ -190,6 +198,7 @@ struct vdec_s {
 	void (*run)(struct vdec_s *vdec,
 			void (*callback)(struct vdec_s *, void *), void *);
 	void (*reset)(struct vdec_s *vdec);
+	void (*dump_state)(struct vdec_s *vdec);
 	irqreturn_t (*irq_handler)(struct vdec_s *);
 	irqreturn_t (*threaded_irq_handler)(struct vdec_s *);
 
@@ -220,7 +229,10 @@ struct vdec_s {
 #define vdec_single(vdec) \
 	((vdec)->type == VDEC_TYPE_SINGLE)
 #define vdec_dual(vdec) \
-	((vdec)->port->type & PORT_TYPE_DUALDEC)
+	(((vdec)->port->type & PORT_TYPE_DUALDEC) ||\
+	 (amports_get_debug_flags() & 0x100))
+#define vdec_secure(vdec) \
+	(((vdec)->port_flag & PORT_FLAG_DRM))
 
 /* construct vdec strcture */
 extern struct vdec_s *vdec_create(struct stream_port_s *port,
@@ -237,6 +249,9 @@ extern int vdec_set_pts64(struct vdec_s *vdec, u64 pts64);
 /* set vfm map when use frame base decoder */
 extern int vdec_set_video_path(struct vdec_s *vdec, int video_path);
 
+/* set receive id when receive is ionvideo or amlvideo */
+extern int vdec_set_receive_id(struct vdec_s *vdec, int receive_id);
+
 /* add frame data to input chain */
 extern int vdec_write_vframe(struct vdec_s *vdec, const char *buf,
 				size_t count);
@@ -251,8 +266,20 @@ extern int vdec_prepare_input(struct vdec_s *vdec, struct vframe_chunk_s **p);
 /* clean decoder input */
 extern void vdec_clean_input(struct vdec_s *vdec);
 
+/* sync decoder input */
+extern int vdec_sync_input(struct vdec_s *vdec);
+
 /* enable decoder input */
 extern void vdec_enable_input(struct vdec_s *vdec);
+
+/* set decoder input prepare level */
+extern void vdec_set_prepare_level(struct vdec_s *vdec, int level);
+
+/* set vdec input */
+extern int vdec_set_input_buffer(struct vdec_s *vdec, u32 start, u32 size);
+
+/* check if decoder can get more input */
+extern bool vdec_has_more_input(struct vdec_s *vdec);
 
 /* allocate input chain
  * register vdec_device
@@ -289,6 +316,8 @@ extern int vdec_set_trickmode(struct vdec_s *vdec, unsigned long trickmode);
 
 extern void vdec_set_flag(struct vdec_s *vdec, u32 flag);
 
+extern void vdec_set_eos(struct vdec_s *vdec, bool eos);
+
 extern void vdec_set_next_sched(struct vdec_s *vdec, struct vdec_s *next_vdec);
 
 extern const char *vdec_status_str(struct vdec_s *vdec);
@@ -297,7 +326,13 @@ extern const char *vdec_type_str(struct vdec_s *vdec);
 
 extern const char *vdec_device_name_str(struct vdec_s *vdec);
 
+extern void vdec_schedule_work(struct work_struct *work);
+
 extern void  vdec_count_info(struct vdec_info *vs, unsigned int err,
 	unsigned int offset);
+
+extern bool vdec_need_more_data(struct vdec_s *vdec);
+
+extern void hevc_reset_core(struct vdec_s *vdec);
 
 #endif				/* VDEC_H */

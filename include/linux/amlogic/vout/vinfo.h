@@ -28,11 +28,14 @@ enum vmode_e {
 	VMODE_480I  = 0,
 	VMODE_480I_RPT,
 	VMODE_480CVBS,
+	VMODE_NTSC_M,
 	VMODE_480P,
 	VMODE_480P_RPT,
 	VMODE_576I,
 	VMODE_576I_RPT,
 	VMODE_576CVBS,
+	VMODE_PAL_M,
+	VMODE_PAL_N,
 	VMODE_576P,
 	VMODE_576P_RPT,
 	VMODE_720P,
@@ -94,11 +97,14 @@ enum tvmode_e {
 	TVMODE_480I = 0,
 	TVMODE_480I_RPT,
 	TVMODE_480CVBS,
+	TVMODE_NTSC_M,
 	TVMODE_480P,
 	TVMODE_480P_RPT,
 	TVMODE_576I,
 	TVMODE_576I_RPT,
 	TVMODE_576CVBS,
+	TVMODE_PAL_M,
+	TVMODE_PAL_N,
 	TVMODE_576P,
 	TVMODE_576P_RPT,
 	TVMODE_720P,
@@ -223,6 +229,22 @@ struct dv_info {
 	} vers;
 };
 
+struct vinfo_base_s {
+	enum vmode_e mode;
+	u32 width;
+	u32 height;
+	u32 field_height;
+	u32 aspect_ratio_num;
+	u32 aspect_ratio_den;
+	u32 sync_duration_num;
+	u32 sync_duration_den;
+	u32 screen_real_width;
+	u32 screen_real_height;
+	u32 video_clk;
+	enum tvin_color_fmt_e viu_color_fmt;
+	struct hdr_info hdr_info;
+};
+
 struct vinfo_s {
 	char *name;
 	enum vmode_e mode;
@@ -236,6 +258,8 @@ struct vinfo_s {
 	u32 screen_real_width;
 	u32 screen_real_height;
 	u32 video_clk;
+	u32 htotal;
+	u32 vtotal;
 	enum tvin_color_fmt_e viu_color_fmt;
 	struct hdr_info hdr_info;
 	struct master_display_info_s

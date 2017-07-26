@@ -100,7 +100,7 @@ static int lcd_vmode_is_supported(enum vmode_e mode)
 
 static int lcd_vout_disable(enum vmode_e cur_vmod)
 {
-	aml_lcd_notifier_call_chain(LCD_EVENT_POWER_OFF, NULL);
+	aml_lcd_notifier_call_chain(LCD_EVENT_IF_POWER_OFF, NULL);
 	LCDPR("%s finished\n", __func__);
 	return 0;
 }
@@ -146,8 +146,7 @@ static int lcd_framerate_automation_set_mode(void)
 		lcd_drv->lcd_info->sync_duration_den;
 
 	/* update clk & timing config */
-	lcd_vmode_change(lcd_drv->lcd_config);
-	lcd_drv->lcd_info->video_clk = lcd_drv->lcd_config->lcd_timing.lcd_clk;
+	lcd_tablet_config_update(lcd_drv->lcd_config);
 	/* update interface timing if needed, current no need */
 #ifdef CONFIG_AML_VPU
 	request_vpu_clk_vmod(
@@ -289,17 +288,40 @@ static int lcd_get_vframe_rate_policy(void)
 #ifdef CONFIG_PM
 static int lcd_suspend(void)
 {
+	mutex_lock(&lcd_power_mutex);
 	aml_lcd_notifier_call_chain(LCD_EVENT_POWER_OFF, NULL);
 	lcd_resume_flag = 0;
 	LCDPR("%s finished\n", __func__);
+	mutex_unlock(&lcd_power_mutex);
 	return 0;
 }
+
 static int lcd_resume(void)
 {
-	if (lcd_resume_flag == 0) {
+	struct aml_lcd_drv_s *lcd_drv = aml_lcd_get_driver();
+
+	if (lcd_resume_flag)
+		return 0;
+
+	if (lcd_drv->lcd_resume_flag) {
+		if (lcd_drv->workqueue) {
+			queue_delayed_work(lcd_drv->workqueue,
+				&lcd_drv->lcd_resume_delayed_work, 0);
+		} else {
+			LCDPR("Warning: no lcd workqueue\n");
+			mutex_lock(&lcd_power_mutex);
+			lcd_resume_flag = 1;
+			aml_lcd_notifier_call_chain(LCD_EVENT_POWER_ON, NULL);
+			LCDPR("%s finished\n", __func__);
+			mutex_unlock(&lcd_power_mutex);
+		}
+	} else {
+		LCDPR("directly lcd late resume\n");
+		mutex_lock(&lcd_power_mutex);
 		lcd_resume_flag = 1;
 		aml_lcd_notifier_call_chain(LCD_EVENT_POWER_ON, NULL);
 		LCDPR("%s finished\n", __func__);
+		mutex_unlock(&lcd_power_mutex);
 	}
 
 	return 0;
@@ -346,6 +368,8 @@ static void lcd_tablet_vinfo_update(void)
 		vinfo->sync_duration_num = pconf->lcd_timing.sync_duration_num;
 		vinfo->sync_duration_den = pconf->lcd_timing.sync_duration_den;
 		vinfo->video_clk = pconf->lcd_timing.lcd_clk;
+		vinfo->htotal = pconf->lcd_basic.h_period;
+		vinfo->vtotal = pconf->lcd_basic.v_period;
 		vinfo->viu_color_fmt = TVIN_RGB444;
 
 		lcd_hdr_vinfo_update();
@@ -356,7 +380,7 @@ static void lcd_tablet_vinfo_update_default(void)
 {
 	struct aml_lcd_drv_s *lcd_drv = aml_lcd_get_driver();
 	struct vinfo_s *vinfo;
-	unsigned int h_active, v_active;
+	unsigned int h_active, v_active, h_total, v_total;
 
 	if (lcd_drv->lcd_info == NULL) {
 		LCDERR("no lcd_info exist\n");
@@ -367,6 +391,8 @@ static void lcd_tablet_vinfo_update_default(void)
 			- lcd_vcbus_read(ENCL_VIDEO_HAVON_BEGIN) + 1;
 	v_active = lcd_vcbus_read(ENCL_VIDEO_VAVON_ELINE)
 			- lcd_vcbus_read(ENCL_VIDEO_VAVON_BLINE) + 1;
+	h_total = lcd_vcbus_read(ENCL_VIDEO_MAX_PXCNT) + 1;
+	v_total = lcd_vcbus_read(ENCL_VIDEO_MAX_LNCNT) + 1;
 
 	vinfo = lcd_drv->lcd_info;
 	if (vinfo) {
@@ -382,6 +408,8 @@ static void lcd_tablet_vinfo_update_default(void)
 		vinfo->sync_duration_num = 60;
 		vinfo->sync_duration_den = 1;
 		vinfo->video_clk = 0;
+		vinfo->htotal = h_total;
+		vinfo->vtotal = v_total;
 		vinfo->viu_color_fmt = TVIN_RGB444;
 	}
 }
@@ -447,6 +475,15 @@ static void lcd_config_print(struct lcd_config_s *pconf)
 			pconf->lcd_control.lvds_config->port_swap);
 		LCDPR("lane_reverse = %d\n",
 			pconf->lcd_control.lvds_config->lane_reverse);
+	} else if (pconf->lcd_basic.lcd_type == LCD_VBYONE) {
+		LCDPR("lane_count = %d\n",
+			pconf->lcd_control.vbyone_config->lane_count);
+		LCDPR("byte_mode = %d\n",
+			pconf->lcd_control.vbyone_config->byte_mode);
+		LCDPR("region_num = %d\n",
+			pconf->lcd_control.vbyone_config->region_num);
+		LCDPR("color_fmt = %d\n",
+			pconf->lcd_control.vbyone_config->color_fmt);
 	}
 }
 
@@ -462,6 +499,10 @@ static int lcd_init_load_from_dts(struct lcd_config_s *pconf,
 			lcd_ttl_pinmux_set(1);
 		else
 			lcd_ttl_pinmux_set(0);
+		break;
+	case LCD_VBYONE:
+		if (lcd_drv->lcd_status) /* lock pinmux if lcd in on */
+			lcd_vbyone_pinmux_set(1);
 		break;
 	default:
 		break;
@@ -645,6 +686,41 @@ static int lcd_config_load_from_dts(struct lcd_config_s *pconf,
 			LCDPR("set phy_clk vswing=0x%x, preemphasis=0x%x\n",
 				lvdsconf->phy_clk_vswing,
 				lvdsconf->phy_clk_preem);
+		}
+		break;
+	case LCD_VBYONE:
+		ret = of_property_read_u32_array(child, "vbyone_attr",
+			&para[0], 4);
+		if (ret) {
+			LCDERR("failed to get vbyone_attr\n");
+		} else {
+			pconf->lcd_control.vbyone_config->lane_count = para[0];
+			pconf->lcd_control.vbyone_config->region_num = para[1];
+			pconf->lcd_control.vbyone_config->byte_mode = para[2];
+			pconf->lcd_control.vbyone_config->color_fmt = para[3];
+		}
+		ret = of_property_read_u32_array(child, "vbyone_intr_enable",
+			&para[0], 2);
+		if (ret) {
+			LCDERR("failed to get vbyone_intr_enable\n");
+		} else {
+			pconf->lcd_control.vbyone_config->intr_en = para[0];
+			pconf->lcd_control.vbyone_config->vsync_intr_en =
+				para[1];
+		}
+		ret = of_property_read_u32_array(child, "phy_attr",
+			&para[0], 2);
+		if (ret) {
+			if (lcd_debug_print_flag)
+				LCDPR("failed to get phy_attr\n");
+		} else {
+			pconf->lcd_control.vbyone_config->phy_vswing = para[0];
+			pconf->lcd_control.vbyone_config->phy_preem = para[1];
+			if (lcd_debug_print_flag) {
+				LCDPR("phy vswing=%d, preemphasis=%d\n",
+				pconf->lcd_control.vbyone_config->phy_vswing,
+				pconf->lcd_control.vbyone_config->phy_preem);
+			}
 		}
 		break;
 	default:
@@ -858,6 +934,34 @@ static int lcd_config_load_from_unifykey(struct lcd_config_s *pconf)
 		p += LCD_UKEY_IF_ATTR_7;
 		p += LCD_UKEY_IF_ATTR_8;
 		p += LCD_UKEY_IF_ATTR_9;
+	} else if (pconf->lcd_basic.lcd_type == LCD_VBYONE) {
+		pconf->lcd_control.vbyone_config->lane_count =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_0;
+		pconf->lcd_control.vbyone_config->region_num =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_1;
+		pconf->lcd_control.vbyone_config->byte_mode  =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_2;
+		pconf->lcd_control.vbyone_config->color_fmt  =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_3;
+		pconf->lcd_control.vbyone_config->phy_vswing =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_4;
+		pconf->lcd_control.vbyone_config->phy_preem =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_5;
+		pconf->lcd_control.vbyone_config->intr_en =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_6;
+		pconf->lcd_control.vbyone_config->vsync_intr_en =
+				(*p | ((*(p + 1)) << 8)) & 0xff;
+		p += LCD_UKEY_IF_ATTR_7;
+		/* dummy pointer */
+		p += LCD_UKEY_IF_ATTR_8;
+		p += LCD_UKEY_IF_ATTR_9;
 	} else {
 		LCDERR("unsupport lcd_type: %d\n", pconf->lcd_basic.lcd_type);
 		p += LCD_UKEY_IF_ATTR_0;
@@ -906,11 +1010,12 @@ static void lcd_config_init(struct lcd_config_s *pconf)
 	pconf->lcd_timing.v_period_dft = pconf->lcd_basic.v_period;
 	lcd_tcon_config(pconf);
 
+	lcd_tablet_vinfo_update();
+
+	lcd_tablet_config_update(pconf);
 	lcd_clk_generate_parameter(pconf);
 	ss_level = pconf->lcd_timing.ss_level;
 	cconf->ss_level = (ss_level >= cconf->ss_level_max) ? 0 : ss_level;
-
-	lcd_tablet_vinfo_update();
 }
 
 static int lcd_get_config(struct lcd_config_s *pconf, struct device *dev)
@@ -960,14 +1065,8 @@ static void lcd_set_vinfo(unsigned int sync_duration)
 	lcd_drv->lcd_info->sync_duration_num = sync_duration;
 	lcd_drv->lcd_info->sync_duration_den = 100;
 
-	/* update lcd config sync_duration, for calculate */
-	lcd_drv->lcd_config->lcd_timing.sync_duration_num = sync_duration;
-	lcd_drv->lcd_config->lcd_timing.sync_duration_den = 100;
-
-	/* update clk & timing config */
-	lcd_vmode_change(lcd_drv->lcd_config);
-	lcd_drv->lcd_info->video_clk = lcd_drv->lcd_config->lcd_timing.lcd_clk;
-	/* update interface timing if needed, current no need */
+	/* update interface timing */
+	lcd_tablet_config_update(lcd_drv->lcd_config);
 #ifdef CONFIG_AML_VPU
 	request_vpu_clk_vmod(
 		lcd_drv->lcd_config->lcd_timing.lcd_clk, VPU_VENCL);

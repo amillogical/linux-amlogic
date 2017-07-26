@@ -58,6 +58,8 @@
 #include <linux/of.h>
 #include <linux/sizes.h>
 #include <linux/amlogic/codec_mm/codec_mm.h>
+#include <linux/amlogic/codec_mm/configs.h>
+
 #include <linux/dma-mapping.h>
 #include <linux/of_fdt.h>
 #include <linux/dma-contiguous.h>
@@ -74,6 +76,7 @@ static int debug_flag;
 static int dump_file_flag;
 static int p2p_mode = 2;
 static int output_format_mode = 1;
+static int txlx_output_format_mode;
 /* #define MM_ALLOC_SIZE 48*SZ_1M */
 #define NO_TASK_MODE
 
@@ -117,7 +120,7 @@ static int task_running;
 
 #define MAX_VF_POOL_SIZE 2
 
-#define PIC_DEC_CANVAS_START 0
+#define PIC_DEC_CANVAS_START 3
 #define PIC_DEC_CANVAS_Y_FRONT (PIC_DEC_CANVAS_START + 1)
 #define PIC_DEC_CANVAS_UV_FRONT (PIC_DEC_CANVAS_Y_FRONT + 1)
 
@@ -1951,7 +1954,6 @@ int picdec_buffer_init(void)
 	unsigned int buf_size;
 	unsigned offset = 0;
 	picdec_buffer_status = 0;
-	picdec_device.output_format_mode = output_format_mode;
 
 	picdec_cma_buf_init();
 	get_picdec_buf_info(&buf_start, &buf_size, NULL);
@@ -1971,6 +1973,12 @@ int picdec_buffer_init(void)
 	picdec_device.disp_width = picdec_device.vinfo->width;
 
 	picdec_device.disp_height = picdec_device.vinfo->height;
+	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_TXLX) &&
+	((picdec_device.disp_width * picdec_device.disp_height) >=
+	1920 * 1080))
+		picdec_device.output_format_mode = txlx_output_format_mode;
+	else
+		picdec_device.output_format_mode = output_format_mode;
 
 	canvas_width = (picdec_device.disp_width + 0x1f) & ~0x1f;
 
@@ -2641,6 +2649,7 @@ static int picdec_driver_probe(struct platform_device *pdev)
 	init_picdec_device();
 	picdec_device.p2p_mode = 0;
 	picdec_device.output_format_mode = 0;
+	txlx_output_format_mode = 0;
 	return r;
 
 	/* char *buf_start; */
@@ -2712,6 +2721,15 @@ static struct platform_driver picdec_drv = {
 	}
 };
 
+static struct mconfig jpeg_configs[] = {
+	MC_PU32("debug_flag", &debug_flag),
+	MC_PU32("dump_file_flag", &dump_file_flag),
+	MC_PU32("p2p_mode", &p2p_mode),
+	MC_PU32("output_format_mode", &output_format_mode),
+};
+static struct mconfig_node jpeg_node;
+
+
 static int __init picdec_init_module(void)
 {
 	int err;
@@ -2727,7 +2745,8 @@ static int __init picdec_init_module(void)
 		return err;
 
 	}
-
+	INIT_REG_NODE_CONFIGS("media.decoder", &jpeg_node,
+		"jpeg", jpeg_configs, CONFIG_FOR_RW);
 	return err;
 }
 
@@ -2755,6 +2774,9 @@ MODULE_PARM_DESC(p2p_mode, "\n picdec zoom mode\n");
 
 module_param(output_format_mode, uint, 0664);
 MODULE_PARM_DESC(output_format_mode, "\n picdec output fomat mode\n");
+
+module_param(txlx_output_format_mode, uint, 0664);
+MODULE_PARM_DESC(txlx_output_format_mode, "\n txlx picdec output fomat mode\n");
 
 MODULE_DESCRIPTION("Amlogic picture decoder driver");
 MODULE_LICENSE("GPL");

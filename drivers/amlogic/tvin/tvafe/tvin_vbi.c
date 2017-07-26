@@ -66,8 +66,8 @@ static unsigned int vcnt = 1;
 
 static void vbi_hw_reset(struct vbi_dev_s *devp)
 {
-	W_APB_REG(ACD_REG_22, 0x82080000);
-	W_APB_REG(ACD_REG_22, 0x04080000);
+	W_VBI_APB_REG(ACD_REG_22, 0x82080000);
+	W_VBI_APB_REG(ACD_REG_22, 0x04080000);
 	/* after hw reset,bellow paramters must be reset!!! */
 	vcnt = 1;
 	devp->pac_addr = devp->pac_addr_start;
@@ -78,34 +78,34 @@ static void vbi_tt_start_code_set(struct vbi_dev_s *devp)
 {
 	unsigned int vbi_start_code = devp->vbi_start_code;
 	/* start code */
-	W_APB_REG(CVD2_VBI_TT_FRAME_CODE_CTL, vbi_start_code);
+	W_VBI_APB_REG(CVD2_VBI_TT_FRAME_CODE_CTL, vbi_start_code);
 }
 
 static void vbi_data_type_set(struct vbi_dev_s *devp)
 {
 	unsigned int vbi_data_type = devp->vbi_data_type;
 	/* data type */
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE6,  vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE7 , vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE8 , vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE9 , vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE10, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE11, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE12, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE13, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE14, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE15, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE17, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE18, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE19, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE20, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE21, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE22, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE23, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE24, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE25, vbi_data_type);
-	W_APB_REG(CVD2_VBI_DATA_TYPE_LINE26, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE6,  vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE7 , vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE8 , vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE9 , vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE10, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE11, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE12, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE13, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE14, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE15, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE17, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE18, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE19, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE20, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE21, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE22, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE23, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE24, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE25, vbi_data_type);
+	W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE26, vbi_data_type);
 }
 
 static void vbi_dto_set(struct vbi_dev_s *devp)
@@ -116,14 +116,14 @@ static void vbi_dto_set(struct vbi_dev_s *devp)
 	dto_tt = devp->vbi_dto_tt;
 	dto_wss = devp->vbi_dto_wss;
 	dto_vps = devp->vbi_dto_vps;
-	W_APB_REG(CVD2_VBI_CC_DTO_MSB,	     ((dto_cc>>8) & 0xff));
-	W_APB_REG(CVD2_VBI_CC_DTO_LSB,	     (dto_cc & 0xff));
-	W_APB_REG(CVD2_VBI_TT_DTO_MSB,	     ((dto_tt>>8) & 0xff));
-	W_APB_REG(CVD2_VBI_TT_DTO_LSB,	     (dto_tt & 0xff));
-	W_APB_REG(CVD2_VBI_WSS_DTO_MSB,	     ((dto_wss>>8) & 0xff));
-	W_APB_REG(CVD2_VBI_WSS_DTO_LSB,	     (dto_wss & 0xff));
-	W_APB_REG(CVD2_VBI_VPS_DTO_MSB,	     ((dto_vps>>8) & 0xff));
-	W_APB_REG(CVD2_VBI_VPS_DTO_LSB,	     (dto_vps & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_CC_DTO_MSB,	     ((dto_cc>>8) & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_CC_DTO_LSB,	     (dto_cc & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_TT_DTO_MSB,	     ((dto_tt>>8) & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_TT_DTO_LSB,	     (dto_tt & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_WSS_DTO_MSB,	     ((dto_wss>>8) & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_WSS_DTO_LSB,	     (dto_wss & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_VPS_DTO_MSB,	     ((dto_vps>>8) & 0xff));
+	W_VBI_APB_REG(CVD2_VBI_VPS_DTO_LSB,	     (dto_vps & 0xff));
 
 }
 /* hw reset,config vbi line data type,start code,dto */
@@ -136,7 +136,7 @@ static void vbi_slicer_type_set(struct vbi_dev_s *devp)
 		devp->vbi_data_type = VBI_DATA_TYPE_USCC;
 		devp->vbi_start_code = VBI_START_CODE_USCC;
 		devp->vbi_dto_cc = VBI_DTO_USCC;
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE21,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE21,
 			VBI_DATA_TYPE_USCC);
 		break;
 	case VBI_TYPE_EUROCC:
@@ -144,17 +144,17 @@ static void vbi_slicer_type_set(struct vbi_dev_s *devp)
 		devp->vbi_start_code = VBI_START_CODE_EUROCC;
 		devp->vbi_dto_cc = VBI_DTO_EURCC;
 		/*line18 for PAL M*/
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE18,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE18,
 			VBI_DATA_TYPE_EUROCC);
 		/*line22 for PAL B,D,G,H,I,N,CN*/
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE22,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE22,
 			VBI_DATA_TYPE_EUROCC);
 		break;
 	case VBI_TYPE_VPS:
 		devp->vbi_data_type = VBI_DATA_TYPE_VPS;
 		devp->vbi_start_code = VBI_START_CODE_VPS;
 		devp->vbi_dto_vps = VBI_DTO_VPS;
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, VBI_DATA_TYPE_VPS);
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, VBI_DATA_TYPE_VPS);
 		break;
 	case VBI_TYPE_TT_625A:
 		devp->vbi_data_type = VBI_DATA_TYPE_TT_625A;
@@ -196,17 +196,17 @@ static void vbi_slicer_type_set(struct vbi_dev_s *devp)
 		devp->vbi_start_code = VBI_START_CODE_WSS625;
 		devp->vbi_dto_wss = VBI_DTO_WSS625;
 		/*line17 for PAL M*/
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE17,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE17,
 			VBI_DATA_TYPE_WSS625);
 		/*line23 for PAL B,D,G,H,I,N,CN*/
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE23,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE23,
 			VBI_DATA_TYPE_WSS625);
 		break;
 	case VBI_TYPE_WSSJ:
 		devp->vbi_data_type = VBI_DATA_TYPE_WSSJ;
 		devp->vbi_start_code = VBI_START_CODE_WSSJ;
 		devp->vbi_dto_wss = VBI_DTO_WSSJ;
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE20,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE20,
 			VBI_DATA_TYPE_WSSJ);
 		break;
 	case VBI_TYPE_NULL:
@@ -222,14 +222,14 @@ static void vbi_slicer_type_set(struct vbi_dev_s *devp)
 		devp->vbi_dto_wss = VBI_DTO_WSS625;
 		devp->vbi_dto_tt = VBI_DTO_TT625B;
 		devp->vbi_dto_vps = VBI_DTO_VPS;
-		W_APB_REG(CVD2_VBI_TT_FRAME_CODE_CTL,
+		W_VBI_APB_REG(CVD2_VBI_TT_FRAME_CODE_CTL,
 			VBI_START_CODE_TT_625B_REVERSE);
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, VBI_DATA_TYPE_VPS);
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE20,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE16, VBI_DATA_TYPE_VPS);
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE20,
 			VBI_DATA_TYPE_TT_625B);
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE21,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE21,
 			VBI_DATA_TYPE_TT_625B);
-		W_APB_REG(CVD2_VBI_DATA_TYPE_LINE23,
+		W_VBI_APB_REG(CVD2_VBI_DATA_TYPE_LINE23,
 			VBI_DATA_TYPE_WSS625);
 		break;
 	}
@@ -245,24 +245,28 @@ static void vbi_hw_init(struct vbi_dev_s *devp)
 {
 	/* vbi memory setting */
 	memset(devp->pac_addr_start, 0, devp->mem_size);
-	W_APB_REG(ACD_REG_2F, devp->mem_start >> 4);
-	W_APB_BIT(ACD_REG_21, ((devp->mem_size >> 4) - 1), 16, 16);
-	W_APB_BIT(ACD_REG_21, 0, AML_VBI_START_ADDR_BIT,
+	W_VBI_APB_REG(ACD_REG_2F, devp->mem_start >> 4);
+	if (0) {/*(is_meson_txlx_cpu()) {*/
+		W_VBI_APB_BIT(ACD_REG_42, ((devp->mem_size >> 4) - 1), 0, 24);
+		W_VBI_APB_BIT(ACD_REG_42, 1, 31, 1);
+	} else
+		W_VBI_APB_BIT(ACD_REG_21, ((devp->mem_size >> 4) - 1), 16, 16);
+	W_VBI_APB_BIT(ACD_REG_21, 0, AML_VBI_START_ADDR_BIT,
 		AML_VBI_START_ADDR_WID);
 	/*disable vbi*/
-	W_APB_REG(CVD2_VBI_FRAME_CODE_CTL,   0x14);
+	W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL,   0x14);
 	/* config vbi start line */
-	W_APB_REG(CVD2_VBI_CC_START,	     VBI_START_CC);
-	W_APB_REG(CVD2_VBI_WSS_START,	     VBI_START_WSS);
-	W_APB_REG(CVD2_VBI_TT_START,	     VBI_START_TT);
-	W_APB_REG(CVD2_VBI_VPS_START,	     VBI_START_VPS);
-	W_APB_BIT(CVD2_VBI_CONTROL, 1, 0, 1);
-	W_APB_REG(CVD2_VSYNC_VBI_LOCKOUT_START, 0x00000000);
-	W_APB_REG(CVD2_VSYNC_VBI_LOCKOUT_END, 0x00000025);
+	W_VBI_APB_REG(CVD2_VBI_CC_START,	     VBI_START_CC);
+	W_VBI_APB_REG(CVD2_VBI_WSS_START,	     VBI_START_WSS);
+	W_VBI_APB_REG(CVD2_VBI_TT_START,	     VBI_START_TT);
+	W_VBI_APB_REG(CVD2_VBI_VPS_START,	     VBI_START_VPS);
+	W_VBI_APB_BIT(CVD2_VBI_CONTROL, 1, 0, 1);
+	W_VBI_APB_REG(CVD2_VSYNC_VBI_LOCKOUT_START, 0x00000000);
+	W_VBI_APB_REG(CVD2_VSYNC_VBI_LOCKOUT_END, 0x00000025);
 	/* be care the polarity bellow!!! */
-	W_APB_BIT(CVD2_VSYNC_TIME_CONSTANT, 0, 7, 1);
+	W_VBI_APB_BIT(CVD2_VSYNC_TIME_CONSTANT, 0, 7, 1);
 	/*enable vbi*/
-	W_APB_REG(CVD2_VBI_FRAME_CODE_CTL,   0x15);
+	W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL,   0x15);
 	pr_info("[vbi..] %s: vbi hw init done.\n", __func__);
 }
 #define vbi_get_byte(rdptr, total_buffer, retbyte) \
@@ -431,10 +435,13 @@ static void vbi_slicer_task(unsigned long arg)
 			bytes_buffer, rptr);
 		goto err_exit;
 	}
-	devp->current_pac_wptr = devp->mem_start + (devp->pac_addr -
+	if (0)/*(is_meson_txlx_cpu())*/
+		devp->current_pac_wptr = R_VBI_APB_REG(ACD_REG_43) << 4;
+	else
+		devp->current_pac_wptr = devp->mem_start + (devp->pac_addr -
 		devp->pac_addr_start) + bytes_buffer;
 	/*reg ACD_REG_0C is not used ?!! hope add in next ic!!*/
-	/*devp->current_pac_wptr = R_APB_REG(ACD_REG_0C);*/
+	/*devp->current_pac_wptr = R_VBI_APB_REG(ACD_REG_0C);*/
 	if (devp->current_pac_wptr != 0 &&
 		devp->current_pac_wptr > devp->mem_start)
 		current_pac_addr = devp->pac_addr_start +
@@ -743,8 +750,11 @@ static ssize_t vbi_buffer_read(struct vbi_ringbuffer_s *src,
 			break;
 		}
 
-		ret = wait_event_interruptible(src->queue,
-			!vbi_ringbuffer_empty(src) || (src->error != 0));
+		if (tvafe_clk_status == false) {
+			ret = -EWOULDBLOCK;
+			pr_info("[vbi..] %s: tvafe is closed.\n", __func__);
+			break;
+		}
 		if (vbi_dbg_en)
 			pr_info("[vbi...]%s:src->pread = %d;src->pwrite = %d\n",
 			__func__,
@@ -774,6 +784,13 @@ static ssize_t vbi_buffer_read(struct vbi_ringbuffer_s *src,
 		}
 		buf += ret;
 	}
+
+	if (tvafe_clk_status == false) {
+		pr_info("[vbi..] %s: tvafe closed already.return 0\n",
+			__func__);
+		return 0;
+	}
+
 	if ((count - todo) <= 0)
 		pr_info("[vbi..] %s: read error!! counter: %Zx or %Zx\n",
 			__func__, (count - todo) , ret);
@@ -815,6 +832,7 @@ static int vbi_open(struct inode *inode, struct file *file)
 			__func__);
 		return -ERESTARTSYS;
 	}
+	tasklet_enable(&vbi_dev->tsklt_slicer);
 	mutex_init(&vbi_dev->slicer->mutex);
 	vbi_ringbuffer_init(&vbi_dev->slicer->buffer, NULL,
 		VBI_DEFAULT_BUFFER_PACKEGE_NUM);
@@ -842,14 +860,15 @@ static int vbi_release(struct inode *inode, struct file *file)
 	struct vbi_slicer_s *vbi_slicer = vbi_dev->slicer;
 	int ret = 0;
 
-	ret = vbi_slicer_free(vbi_dev, vbi_slicer);
 	vbi_dev->tasklet_enable = false;
 	vbi_dev->vbi_start = false;  /*disable data capture function*/
+	tasklet_disable_nosync(&vbi_dev->tsklt_slicer);
+	ret = vbi_slicer_free(vbi_dev, vbi_slicer);
 	/* free irq */
 	free_irq(vbi_dev->vs_irq, (void *)vbi_dev);
 	/* vbi reset release, vbi agent enable */
-	W_APB_REG(ACD_REG_22, 0x06080000);
-	W_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
+	W_VBI_APB_REG(ACD_REG_22, 0x06080000);
+	W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
 	pr_info("[vbi..]%s: device release OK.\n", __func__);
 	return ret;
 }
@@ -875,7 +894,13 @@ static long vbi_ioctl(struct file *file,
 			pr_info("[vbi..] %s: slicer mutex error\n", __func__);
 			return -ERESTARTSYS;
 		}
-		vbi_hw_init(vbi_dev);
+		if (tvafe_clk_status)
+			vbi_hw_init(vbi_dev);
+		else {
+			ret = -EINVAL;
+			mutex_unlock(&vbi_slicer->mutex);
+			break;
+		}
 		if (vbi_slicer->state < VBI_STATE_SET)
 			ret = -EINVAL;
 		else
@@ -902,11 +927,11 @@ static long vbi_ioctl(struct file *file,
 		vbi_dev->tasklet_enable = false;
 		vbi_dev->vbi_start = false;
 		/* manuel reset vbi */
-		/*W_APB_REG(ACD_REG_22, 0x82080000);*/
+		/*W_VBI_APB_REG(ACD_REG_22, 0x82080000);*/
 		/* vbi reset release, vbi agent enable*/
-		W_APB_REG(ACD_REG_22, 0x06080000);
+		W_VBI_APB_REG(ACD_REG_22, 0x06080000);
 		/*WAPB_REG(CVD2_VBI_CC_START, 0x00000054);*/
-		W_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
+		W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
 		pr_info("[vbi..] %s: disable vbi function\n", __func__);
 		mutex_unlock(&vbi_slicer->mutex);
 		pr_info("[vbi..] %s: stop slicer state:%d\n",
@@ -923,7 +948,10 @@ static long vbi_ioctl(struct file *file,
 			ret = -EFAULT;
 			break;
 		}
-		ret = vbi_slicer_set(vbi_dev, vbi_slicer);
+		if (tvafe_clk_status)
+			ret = vbi_slicer_set(vbi_dev, vbi_slicer);
+		else
+			ret = -EFAULT;
 		mutex_unlock(&vbi_slicer->mutex);
 		pr_info("[vbi..] %s: set slicer type to %d ,state:%d\n",
 			__func__, vbi_slicer->type, vbi_slicer->state);
@@ -1208,8 +1236,8 @@ static ssize_t vbi_store(struct device *dev,
 		devp->vbi_start = false;
 		/* manuel reset vbi */
 		/* vbi reset release, vbi agent enable*/
-		W_APB_REG(ACD_REG_22, 0x06080000);
-		W_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
+		W_VBI_APB_REG(ACD_REG_22, 0x06080000);
+		W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
 		pr_info("[vbi..] disable vbi function\n");
 		pr_info("stop done!!!\n");
 	} else if (!strncmp(parm[0], "set_size", strlen("set_size"))) {
@@ -1247,8 +1275,8 @@ static ssize_t vbi_store(struct device *dev,
 		/* free irq */
 		free_irq(devp->vs_irq, (void *)devp);
 		/* vbi reset release, vbi agent enable */
-		W_APB_REG(ACD_REG_22, 0x06080000);
-		W_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
+		W_VBI_APB_REG(ACD_REG_22, 0x06080000);
+		W_VBI_APB_REG(CVD2_VBI_FRAME_CODE_CTL, 0x00000014);
 		pr_info("[vbi..]device release OK.\n");
 	} else {
 		pr_info("[vbi..]unsupport cmd!!!\n");
@@ -1336,6 +1364,7 @@ static int vbi_probe(struct platform_device *pdev)
 	tasklet_init(&vbi_dev->tsklt_slicer, vbi_slicer_task,
 				(unsigned long)vbi_dev);
 
+	tasklet_disable_nosync(&vbi_dev->tsklt_slicer);
 	vbi_dev->tasklet_enable = false;
 	vbi_dev->vbi_start = false;
 	vbi_dev->vs_delay = 40;

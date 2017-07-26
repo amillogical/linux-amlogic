@@ -25,11 +25,15 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/list.h>
+#include <linux/io.h>
+#include <linux/uaccess.h>
 /* Amlogic headers */
 #include <linux/amlogic/amports/vframe.h>
 #include <linux/amlogic/amports/vframe_provider.h>
 #include <linux/amlogic/amports/vframe_receiver.h>
-
+#include <linux/amlogic/codec_mm/configs.h>
+#include <linux/amlogic/major.h>
+#include <linux/platform_device.h>
 /*for dumpinfos*/
 #include <linux/amlogic/canvas/canvas_mgr.h>
 #include <linux/amlogic/canvas/canvas.h>
@@ -46,7 +50,7 @@ static DEFINE_SPINLOCK(lock);
 #define VFM_NAME_LEN    100
 #define VFM_MAP_SIZE    10
 #define VFM_MAP_COUNT   20
-
+static struct device *vfm_dev;
 struct vfm_map_s {
 	char id[VFM_NAME_LEN];
 	char name[VFM_MAP_SIZE][VFM_NAME_LEN];
@@ -150,49 +154,85 @@ int vfm_map_add(char *id, char *name_chain)
 	int ret = -1;
 	char *ptr, *token;
 	struct vfm_map_s *p;
+	int old_num = vfm_map_num;
+	unsigned long flags;
+	int add_ok = 0;
+
 	p = kmalloc(sizeof(struct vfm_map_s), GFP_KERNEL);
-	if (p) {
-		memset(p, 0, sizeof(struct vfm_map_s));
-		memcpy(p->id, id, strlen(id));
-		p->valid = 1;
-		ptr = name_chain;
-		while (1) {
-			token = strsep(&ptr, "\n ");
-			if (token == NULL)
-				break;
-			if (*token == '\0')
-				continue;
-			memcpy(p->name[p->vfm_map_size], token, strlen(token));
-			p->vfm_map_size++;
-		}
-		for (i = 0; i < vfm_map_num; i++) {
-			if (vfm_map[i] && (vfm_map[i]->vfm_map_size ==
-				p->vfm_map_size) &&
-				(!strcmp(vfm_map[i]->id, p->id))) {
-				for (j = 0; j < p->vfm_map_size; j++) {
-					if (strcmp(vfm_map[i]->name[j],
-						p->name[j])){
-						break;
-					}
-				}
-				if (j == p->vfm_map_size) {
-					vfm_map[i]->valid = 1;
-					kfree(p);
+	if (!p) {
+		pr_err("%s: Error, map no mem!!\n", __func__);
+		return -ENOMEM;
+	}
+	memset(p, 0, sizeof(struct vfm_map_s));
+	memcpy(p->id, id, strlen(id));
+	p->valid = 1;
+	ptr = name_chain;
+	while (1) {
+		token = strsep(&ptr, "\n ");
+		if (token == NULL)
+			break;
+		if (*token == '\0')
+			continue;
+		memcpy(p->name[p->vfm_map_size], token, strlen(token));
+		p->vfm_map_size++;
+	}
+retry:
+	for (i = 0; i < vfm_map_num; i++) {
+		struct vfm_map_s *pi = vfm_map[i];
+		if (!pi || (strcmp(pi->id, p->id))) {
+			/*not same id to next one*/
+			continue;
+		} else if (pi->valid) {
+			for (j = 0; j < p->vfm_map_size; j++) {
+				if (strcmp(pi->name[j],
+					p->name[j])){
 					break;
 				}
 			}
+			if (j == p->vfm_map_size) {
+				pi->valid = 1;
+				kfree(p);
+				add_ok = 1;
+				break;
+			}
+		} else if (!pi->valid) {
+			/*over write old setting.
+			  don't free old one,
+			  because it may on used.
+			*/
+			for (j = 0; j < p->vfm_map_size; j++) {
+				/*over write node.*/
+				strcpy(pi->name[j], p->name[j]);
+			}
+			pi->vfm_map_size = p->vfm_map_size;
+			pi->valid = 1;
+			kfree(p);
+			add_ok = 1;
+			break;
+		}
+	}
+	if (!add_ok) {
+		spin_lock_irqsave(&lock, flags);
+		if (i == old_num && old_num != vfm_map_num) {
+			spin_unlock_irqrestore(&lock, flags);
+			pr_err("%s: vfm_map changed on add, need retry!\n",
+				__func__);
+			goto retry;
 		}
 		if (i == vfm_map_num) {
 			if (i < VFM_MAP_COUNT) {
 				vfm_map[i] = p;
 				vfm_map_num++;
+				add_ok = 1;
 			} else{
 				pr_err("%s: Error, map full\n", __func__);
 				ret = -1;
 			}
 		}
-		ret = 0;
+		spin_unlock_irqrestore(&lock, flags);
 	}
+	if (add_ok)
+		ret = 0;
 	return ret;
 }
 static char *vf_get_provider_name_inmap(int i, const char *receiver_name)
@@ -347,7 +387,10 @@ static void vfm_init(void)
 	char def_dvel_id[] = "dvelpath";
 	char def_dvel_chain[] = "dveldec dvel";
 #endif
-
+#if 1/*def CONFIG_AM_HDMIIN_DV*/
+	char def_dvhdmiin_id[] = "dvhdmiin";
+	char def_dvhdmiin_chain[] = "dv_vdin amvideo";
+#endif
 	int i;
 	for (i = 0; i < VFM_MAP_COUNT; i++)
 		vfm_map[i] = NULL;
@@ -373,6 +416,9 @@ static void vfm_init(void)
 	vfm_map_add(def_dvbl_id, def_dvbl_chain);
 	vfm_map_add(def_dvel_id, def_dvel_chain);
 #endif
+#if 1/*def CONFIG_AM_HDMIIN_DV*/
+	vfm_map_add(def_dvhdmiin_id, def_dvhdmiin_chain);
+#endif
 }
 
 /*
@@ -385,7 +431,9 @@ static ssize_t vfm_map_show(struct class *class,
 	int len = 0;
 	for (i = 0; i < vfm_map_num; i++) {
 		if (vfm_map[i] && vfm_map[i]->valid) {
-			len += sprintf(buf + len, "%s { ", vfm_map[i]->id);
+			len += sprintf(buf + len, "[%02d]  %s { ",
+				i,/*in slot num.*/
+				vfm_map[i]->id);
 			for (j = 0; j < vfm_map[i]->vfm_map_size; j++) {
 				if (j < (vfm_map[i]->vfm_map_size - 1)) {
 					len += sprintf(buf + len, "%s(%d) ",
@@ -404,18 +452,17 @@ static ssize_t vfm_map_show(struct class *class,
 	return len;
 }
 
-static int vf_get_states(struct vframe_provider_s *vfp,
+static int vfm_vf_get_states(struct vframe_provider_s *vfp,
 	struct vframe_states *states)
 {
 	int ret = -1;
 	unsigned long flags;
 	spin_lock_irqsave(&lock, flags);
-	if (vfp && vfp->ops && vfp->ops->vf_states)
-		ret = vfp->ops->vf_states(states, vfp->op_arg);
+	ret = vf_get_states(vfp, states);
 	spin_unlock_irqrestore(&lock, flags);
 	return ret;
 }
-static inline struct vframe_s *vmf_vf_peek(
+static inline struct vframe_s *vfm_vf_peek(
 	struct vframe_provider_s *vfp)
 {
 	if (!(vfp && vfp->ops && vfp->ops->peek))
@@ -431,7 +478,7 @@ static void vfm_dump_provider(const char *name)
 
 	if (!prov)
 		return;
-	if (!vf_get_states(prov, &states)) {
+	if (!vfm_vf_get_states(prov, &states)) {
 		pr_info("vframe_pool_size=%d\n",
 			states.vf_pool_size);
 		pr_info("vframe buf_free_num=%d\n",
@@ -443,7 +490,7 @@ static void vfm_dump_provider(const char *name)
 
 		spin_lock_irqsave(&lock, flags);
 
-		vf = vmf_vf_peek(prov);
+		vf = vfm_vf_peek(prov);
 		if (vf) {
 			pr_info("vframe ready frame delayed =%dms\n",
 				(int)(jiffies_64 -
@@ -552,11 +599,7 @@ static ssize_t vfm_map_store(struct class *class,
 	int i = 0;
 	int cmd = 0;
 	char *id = NULL;
-#ifdef CONFIG_MULTI_DEC
-	if (strncmp(buf, "dummy", 5))
-#else
 	if (vfm_debug_flag & 0x10000)
-#endif
 		return count;
 	pr_err("%s:%s\n", __func__, buf);
 	buf_orig = kstrdup(buf, GFP_KERNEL);
@@ -601,9 +644,158 @@ static ssize_t vfm_map_store(struct class *class,
 }
 
 static CLASS_ATTR(map, 0664, vfm_map_show, vfm_map_store);
+
 static struct class vfm_class = {
 	.name = CLS_NAME,
 	};
+int vfm_map_store_fun(const char *trigger, int id, const char *buf, int size)
+{
+	int ret = size;
+	switch (id) {
+	case 0:	return vfm_map_store(NULL, NULL , buf, size);
+	default:
+		ret = -1;
+	}
+	return size;
+}
+int vfm_map_show_fun(const char *trigger, int id, char *sbuf, int size)
+{
+	int ret = -1;
+	void *buf, *getbuf = NULL;
+	if (size < PAGE_SIZE) {
+		getbuf = (void *)__get_free_page(GFP_KERNEL);
+		if (!getbuf)
+			return -ENOMEM;
+		buf = getbuf;
+	} else {
+		buf = sbuf;
+	}
+
+	switch (id) {
+	case 0:
+		ret = vfm_map_show(NULL, NULL , buf);
+		break;
+	default:
+		ret = -1;
+	}
+	if (ret > 0 && getbuf != NULL) {
+		ret = min_t(int, ret, size);
+		strncpy(sbuf, buf, ret);
+	}
+	if (getbuf != NULL)
+		free_page((unsigned long)getbuf);
+	return ret;
+}
+
+static struct mconfig vfm_configs[] = {
+	MC_FUN_ID("map", vfm_map_show_fun, vfm_map_store_fun, 0),
+};
+
+/*********************************************************
+ * /dev/vfm APIs
+ *********************************************************/
+static int vfm_open(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static int vfm_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static long vfm_ioctl(struct file *file, unsigned int cmd, ulong arg)
+{
+	long ret = 0;
+
+	struct vfmctl *user_argp = (void __user *)arg;
+	struct vfmctl argp;
+	switch (cmd) {
+	case VFM_IOCTL_CMD_SET:{
+		ret =
+		copy_from_user(argp.name, user_argp->name, sizeof(argp.name));
+		ret |=
+		copy_from_user(argp.val, user_argp->val, sizeof(argp.val));
+		if (ret)
+			ret = -EINVAL;
+		else
+		ret =
+		vfm_map_store(NULL, NULL, argp.val, sizeof(argp.val));
+		}
+		break;
+	case VFM_IOCTL_CMD_GET:{
+		/*
+		overflow bug, need fixed.
+		vfm_map_show(NULL, NULL, argp.val);
+		ret = copy_to_user(user_argp->val, argp.val, sizeof(argp.val));
+		if (ret != 0)
+			return -EIO;
+		}
+		*/
+		return -EIO;
+		}
+		break;
+	case VFM_IOCTL_CMD_ADD:{
+		ret =
+		copy_from_user(argp.name, user_argp->name, sizeof(argp.name));
+		ret |=
+		copy_from_user(argp.val, user_argp->val, sizeof(argp.val));
+		if (ret)
+			ret = -EINVAL;
+		else
+		ret = vfm_map_add(argp.name, argp.val);
+		}
+		break;
+	case VFM_IOCTL_CMD_RM:{
+		ret =
+		copy_from_user(argp.val, user_argp->val, sizeof(argp.val));
+		if (ret)
+			ret = -EINVAL;
+		else
+		ret = vfm_map_remove(argp.val);
+		}
+		break;
+	case VFM_IOCTL_CMD_DUMP:{
+		ret =
+		copy_from_user(argp.val, user_argp->val, sizeof(argp.val));
+		if (ret)
+			ret = -EINVAL;
+		vfm_dump_provider(argp.val);
+		}
+		break;
+	case VFM_IOCTL_CMD_ADDDUMMY:{
+		ret =
+		copy_from_user(argp.val, user_argp->val, sizeof(argp.val));
+		if (ret)
+			ret = -EINVAL;
+		add_dummy_receiver(argp.val);
+		}
+
+		break;
+	default:
+		return -EINVAL;
+	}
+	return ret;
+}
+
+#ifdef CONFIG_COMPAT
+static long vfm_compat_ioctl(struct file *file, unsigned int cmd, ulong arg)
+{
+	long ret = 0;
+	ret = vfm_ioctl(file, cmd, (ulong)compat_ptr(arg));
+	return ret;
+}
+#endif
+static const struct file_operations vfm_fops = {
+	.owner = THIS_MODULE,
+	.open = vfm_open,
+	.release = vfm_release,
+	.unlocked_ioctl = vfm_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = vfm_compat_ioctl,
+#endif
+	.poll = NULL,
+};
 
 static int __init vfm_class_init(void)
 {
@@ -619,12 +811,24 @@ static int __init vfm_class_init(void)
 		pr_err(KERN_ERR "%s: class_create_file failed\n", __func__);
 		class_unregister(&vfm_class);
 	}
+	REG_PATH_CONFIGS("media.vfm", vfm_configs);
+
+
+	/* create vfm device */
+	error = register_chrdev(VFM_MAJOR, "vfm", &vfm_fops);
+	if (error < 0) {
+		pr_err("Can't register major for vfm device\n");
+		return error;
+	}
+	vfm_dev = device_create(&vfm_class, NULL,
+		MKDEV(VFM_MAJOR, 0), NULL, DEV_NAME);
 	return error;
 }
 
 static void __exit vfm_class_exit(void)
 {
 	class_unregister(&vfm_class);
+	unregister_chrdev(VFM_MAJOR, DEV_NAME);
 }
 
 fs_initcall(vfm_class_init);

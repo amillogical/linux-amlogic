@@ -308,6 +308,7 @@ static int ge2d_process_work_queue(struct ge2d_context_s *wq)
 			mask = mask << 1;
 
 		}
+		pitem->cmd.hang_flag = 1;
 		ge2d_set_cmd(&pitem->cmd);/* set START_FLAG in this func. */
 		/* remove item */
 		block_mode = pitem->cmd.wait_done_flag;
@@ -342,12 +343,9 @@ static int ge2d_process_work_queue(struct ge2d_context_s *wq)
 	} while (pos != head);
 	ge2d_manager.last_wq = wq;
 exit:
-	spin_lock(&ge2d_manager.state_lock);
 	if (wq->ge2d_request_exit)
 		complete(&ge2d_manager.event.process_complete);
 	ge2d_manager.ge2d_state = GE2D_STATE_IDLE;
-	spin_unlock(&ge2d_manager.state_lock);
-
 	return ret;
 }
 
@@ -871,7 +869,7 @@ static int build_ge2d_config_ex_ion(struct config_planes_ion_s *plane,
 				      CANVAS_BLKMODE_LINEAR);
 		}
 		if (plane[2].addr) {
-			plane[2].addr += plane[1].addr;
+			plane[2].addr += plane[0].addr;
 			*canvas_index |= index << 16;
 			*r_offset += 1;
 			canvas_config(index++, plane[2].addr,
@@ -881,7 +879,7 @@ static int build_ge2d_config_ex_ion(struct config_planes_ion_s *plane,
 				      CANVAS_BLKMODE_LINEAR);
 		}
 		if (plane[3].addr) {
-			plane[3].addr += plane[2].addr;
+			plane[3].addr += plane[0].addr;
 			*canvas_index |= index << 24;
 			*r_offset += 1;
 			canvas_config(index++, plane[3].addr,
@@ -1501,20 +1499,10 @@ int  destroy_ge2d_work_queue(struct ge2d_context_s *ge2d_work_queue)
 		spin_unlock(&ge2d_manager.event.sem_lock);
 		if ((ge2d_manager.current_wq == ge2d_work_queue) &&
 		    (ge2d_manager.ge2d_state == GE2D_STATE_RUNNING)) {
-
-		     // check again with lock
-		        int wasRunning = 0;
-		        spin_lock(&ge2d_manager.state_lock);
-		        if (ge2d_manager.ge2d_state== GE2D_STATE_RUNNING)
-		        {
-			  ge2d_work_queue->ge2d_request_exit = 1;
-			  wasRunning = 1;
-			}
-			spin_unlock(&ge2d_manager.state_lock);
-			if (wasRunning)
-				wait_for_completion_timeout(
-					&ge2d_manager.event.process_complete,
-					msecs_to_jiffies(500));
+			ge2d_work_queue->ge2d_request_exit = 1;
+			wait_for_completion_timeout(
+				&ge2d_manager.event.process_complete,
+				msecs_to_jiffies(500));
 			/* condition so complex ,simplify it . */
 			ge2d_manager.last_wq = NULL;
 		} /* else we can delete it safely. */
@@ -1567,7 +1555,6 @@ int ge2d_wq_init(struct platform_device *pdev,
 
 	/* prepare bottom half */
 	spin_lock_init(&ge2d_manager.event.sem_lock);
-	spin_lock_init(&ge2d_manager.state_lock);
 	sema_init(&ge2d_manager.event.cmd_in_sem, 1);
 	init_waitqueue_head(&ge2d_manager.event.cmd_complete);
 	init_completion(&ge2d_manager.event.process_complete);
@@ -1582,6 +1569,12 @@ int ge2d_wq_init(struct platform_device *pdev,
 	ge2d_gen_cfg.dp_off_cnt      = 0;
 	ge2d_gen_cfg.dp_onoff_mode   = 0;
 	ge2d_gen_cfg.vfmt_onoff_en   = 0;
+	/*  fifo size control, 00: 512, 01: 256, 10: 128 11: 96 */
+	ge2d_gen_cfg.fifo_size = 0;
+	/* fifo burst control, 00: 24x64, 01: 32x64
+	 * 10: 48x64, 11:64x64
+	 */
+	ge2d_gen_cfg.burst_ctrl = 0;
 	ge2d_set_gen(&ge2d_gen_cfg);
 	ge2d_clk_config(false);
 

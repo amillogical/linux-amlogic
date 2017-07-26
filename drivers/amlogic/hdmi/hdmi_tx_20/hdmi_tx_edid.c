@@ -86,6 +86,7 @@
 static unsigned char __nosavedata edid_checkvalue[4] = {0};
 static unsigned int hdmitx_edid_check_valid_blocks(unsigned char *buf);
 static void Edid_DTD_parsing(struct rx_cap *pRXCap, unsigned char *data);
+static void hdmitx_edid_set_default_aud(struct hdmitx_dev *hdev);
 
 static void edid_save_checkvalue(unsigned char *buf, unsigned int block_cnt)
 {
@@ -124,7 +125,7 @@ static int Edid_DecodeHeader(struct hdmitx_info *info, unsigned char *buff)
 	return ret;
 }
 
-static void Edid_ReceiverBrandNameParse(struct rx_cap *pRxCap,
+static void Edid_ParsingIDManufacturerName(struct rx_cap *pRxCap,
 		unsigned char *data)
 {
 	int i;
@@ -140,13 +141,36 @@ static void Edid_ReceiverBrandNameParse(struct rx_cap *pRxCap,
 	brand[2] = data[1] & 0x1f;
 
 	for (i = 0; i < 3; i++)
-		pRxCap->ReceiverBrandName[i] = uppercase[brand[i] - 1];
+		pRxCap->IDManufacturerName[i] = uppercase[brand[i] - 1];
+}
+
+static void Edid_ParsingIDProductCode(struct rx_cap *pRXCap,
+		unsigned char *data)
+{
+	if (data == NULL)
+		return;
+	pRXCap->IDProductCode[0] = data[1];
+	pRXCap->IDProductCode[1] = data[0];
+	return;
+}
+
+static void Edid_ParsingIDSerialNumber(struct rx_cap *pRXCap,
+		unsigned char *data)
+{
+	int i;
+
+	if (data == NULL)
+		return;
+	for (i = 0; i < 4; i++)
+		pRXCap->IDSerialNumber[i] = data[3-i];
+	return;
 }
 
 static int Edid_find_name_block(unsigned char *data)
 {
 	int ret = 0;
 	int i;
+
 	for (i = 0; i < 3; i++) {
 		if (data[i])
 			return ret;
@@ -390,14 +414,16 @@ int Edid_Parse_check_HDMI_VSDB(struct hdmitx_dev *hdev,
 	}
 
 	set_vsdb_phy_addr(&info->vsdb_phy_addr, &buff[BlockAddr]);
-	if ((check_fbc_special(&hdev->EDID_buf[0])) ||
-	    (check_fbc_special(&hdev->EDID_buf1[0])))
-		rx_edid_physical_addr(0, 0, 0, 0);
-	else
-		rx_edid_physical_addr(info->vsdb_phy_addr.a,
-			info->vsdb_phy_addr.b,
-			info->vsdb_phy_addr.c,
-			info->vsdb_phy_addr.d);
+	if (hdev->repeater_tx) {
+		if ((check_fbc_special(&hdev->EDID_buf[0])) ||
+		    (check_fbc_special(&hdev->EDID_buf1[0])))
+			rx_edid_physical_addr(0, 0, 0, 0);
+		else
+			rx_edid_physical_addr(info->vsdb_phy_addr.a,
+				info->vsdb_phy_addr.b,
+				info->vsdb_phy_addr.c,
+				info->vsdb_phy_addr.d);
+	}
 	set_vsdb_dc_cap(&hdev->RXCap, &buff[BlockAddr]);
 
 	if (temp_addr >= VSpecificBoundary) {
@@ -418,13 +444,17 @@ int Edid_Parse_check_HDMI_VSDB(struct hdmitx_dev *hdev,
 void Edid_MonitorCapable861(struct hdmitx_info *info,
 	unsigned char edid_flag)
 {
-	 if (edid_flag & 0x80)
+	if (edid_flag & 0x80)
 		info->support_underscan_flag = 1;
-	 if (edid_flag & 0x40)
+	if (edid_flag & 0x40) {
+		struct hdmitx_dev *hdev =
+			container_of(info, struct hdmitx_dev, hdmi_info);
 		info->support_basic_audio_flag = 1;
-	 if (edid_flag & 0x20)
+		hdmitx_edid_set_default_aud(hdev);
+	}
+	if (edid_flag & 0x20)
 		info->support_ycbcr444_flag = 1;
-	 if (edid_flag & 0x10)
+	if (edid_flag & 0x10)
 		info->support_ycbcr422_flag = 1;
 }
 
@@ -1350,6 +1380,7 @@ static int hdmitx_edid_block_parse(struct hdmitx_dev *hdmitx_device,
 	int i, tmp, idx;
 	unsigned char *vfpdb_offset = NULL;
 	struct rx_cap *pRXCap = &(hdmitx_device->RXCap);
+	unsigned int aud_flag = 0;
 
 	if (BlockBuf[0] != 0x02)
 		return -1; /* not a CEA BLOCK. */
@@ -1357,8 +1388,8 @@ static int hdmitx_edid_block_parse(struct hdmitx_dev *hdmitx_device,
 	pRXCap->native_Mode = BlockBuf[3];
 	pRXCap->number_of_dtd += BlockBuf[3] & 0xf;
 
-	pRXCap->VIC_count = 0;
 	pRXCap->native_VIC = 0xff;
+	pRXCap->AUD_count = 0;
 
 	Edid_Y420CMDB_Reset(&(hdmitx_device->hdmi_info));
 	for (offset = 4 ; offset < End ; ) {
@@ -1366,16 +1397,19 @@ static int hdmitx_edid_block_parse(struct hdmitx_dev *hdmitx_device,
 		count = BlockBuf[offset] & 0x1f;
 		switch (tag) {
 		case HDMI_EDID_BLOCK_TYPE_AUDIO:
-			pRXCap->AUD_count = count/3;
+			aud_flag = 1;
+			tmp = count / 3;
+			idx = pRXCap->AUD_count;
+			pRXCap->AUD_count += tmp;
 			offset++;
-			for (i = 0 ; i < pRXCap->AUD_count ; i++) {
-				pRXCap->RxAudioCap[i].audio_format_code =
+			for (i = 0 ; i < tmp; i++) {
+				pRXCap->RxAudioCap[idx + i].audio_format_code =
 					(BlockBuf[offset + i * 3]>>3)&0xf;
-				pRXCap->RxAudioCap[i].channel_num_max =
+				pRXCap->RxAudioCap[idx + i].channel_num_max =
 					BlockBuf[offset + i * 3]&0x7;
-				pRXCap->RxAudioCap[i].freq_cc =
+				pRXCap->RxAudioCap[idx + i].freq_cc =
 					BlockBuf[offset + i * 3 + 1]&0x7f;
-				pRXCap->RxAudioCap[i].cc3 =
+				pRXCap->RxAudioCap[idx + i].cc3 =
 					BlockBuf[offset + i * 3 + 2]&0x7;
 			}
 			offset += count;
@@ -1518,6 +1552,9 @@ case_next:
 		}
 	}
 
+	if (aud_flag == 0)
+		hdmitx_edid_set_default_aud(hdmitx_device);
+
 	Edid_Y420CMDB_PostProcess(hdmitx_device);
 	hdmitx_device->vic_count = pRXCap->VIC_count;
 
@@ -1528,6 +1565,21 @@ case_next:
 		Edid_ParsingVFPDB(pRXCap, vfpdb_offset);
 
 	return 0;
+}
+
+static void hdmitx_edid_set_default_aud(struct hdmitx_dev *hdev)
+{
+	struct rx_cap *pRXCap = &(hdev->RXCap);
+
+	/* if AUD_count not equal to 0, no need default value */
+	if (pRXCap->AUD_count)
+		return;
+
+	pRXCap->AUD_count = 1;
+	pRXCap->RxAudioCap[0].audio_format_code = 1; /* PCM */
+	pRXCap->RxAudioCap[0].channel_num_max = 1; /* 2ch */
+	pRXCap->RxAudioCap[0].freq_cc = 7; /* 32/44.1/48 kHz */
+	pRXCap->RxAudioCap[0].cc3 = 7; /* 16/20/24 bit */
 }
 
 /* add default VICs for DVI case */
@@ -1619,7 +1671,7 @@ static int edid_check_valid(unsigned char *buf)
 		return 0;
 
 	/* check block 1 extension tag */
-	if (buf[0x80] != 0x2)
+	if (!((buf[0x80] == 0x2) || (buf[0x80] == 0xf0)))
 		return 0;
 
 	/* check block 1 checksum */
@@ -1654,7 +1706,8 @@ int check_dvi_hdmi_edid_valid(unsigned char *buf)
 
 	if (buf[0x7e] == 0)/* check Extension flag at block 0 */
 		return 1;
-	else if (buf[0x80] != 0x2)/* check block 1 extension tag */
+	/* check block 1 extension tag */
+	else if (!((buf[0x80] == 0x2) || (buf[0x80] == 0xf0)))
 		return 0;
 
 	/* check block 1 checksum */
@@ -1865,8 +1918,9 @@ int hdmitx_edid_parse(struct hdmitx_dev *hdmitx_device)
 		/* return -1 ; */
 	}
 
-	Edid_ReceiverBrandNameParse(&hdmitx_device->RXCap, &EDID_buf[8]);
-
+	Edid_ParsingIDManufacturerName(&hdmitx_device->RXCap, &EDID_buf[8]);
+	Edid_ParsingIDProductCode(&hdmitx_device->RXCap, &EDID_buf[0x0A]);
+	Edid_ParsingIDSerialNumber(&hdmitx_device->RXCap, &EDID_buf[0x0C]);
 	idx[0] = EDID_DETAILED_TIMING_DES_BLOCK0_POS;
 	idx[1] = EDID_DETAILED_TIMING_DES_BLOCK1_POS;
 	idx[2] = EDID_DETAILED_TIMING_DES_BLOCK2_POS;
@@ -1969,13 +2023,7 @@ int hdmitx_edid_parse(struct hdmitx_dev *hdmitx_device)
 			}
 		}
 
-		if (EDID_buf[i*128+0] == 0x2) {
-			if (hdmitx_edid_block_parse(hdmitx_device,
-				&(EDID_buf[i*128])) >= 0) {
-				if (hdmitx_device->RXCap.IEEEOUI == 0x0c03)
-					break;
-			}
-		}
+		hdmitx_edid_block_parse(hdmitx_device, &(EDID_buf[i*128]));
 	}
 
 /*
@@ -2017,9 +2065,12 @@ int hdmitx_edid_parse(struct hdmitx_dev *hdmitx_device)
 	if (edid_zero_data(EDID_buf))
 		pRXCap->IEEEOUI = 0x0c03;
 
+	if ((!pRXCap->AUD_count) && (!pRXCap->IEEEOUI))
+		hdmitx_edid_set_default_aud(hdmitx_device);
+
 	edid_save_checkvalue(EDID_buf, BlockCount+1);
 
-#if 0
+#if 1
 	i = hdmitx_edid_dump(hdmitx_device, (char *)(hdmitx_device->tmp_buf),
 		HDMI_TMP_BUF_SIZE);
 	hdmitx_device->tmp_buf[i] = 0;
@@ -2032,14 +2083,19 @@ int hdmitx_edid_parse(struct hdmitx_dev *hdmitx_device)
 	/* update RX HDR information */
 	info = get_current_vinfo();
 	if (info) {
-		info->hdr_info.hdr_support = (pRXCap->hdr_sup_eotf_sdr << 0)
-			| (pRXCap->hdr_sup_eotf_hdr << 1)
-			| (pRXCap->hdr_sup_eotf_smpte_st_2084 << 2);
-		info->hdr_info.lumi_max = pRXCap->hdr_lum_max;
-		info->hdr_info.lumi_avg = pRXCap->hdr_lum_avg;
-		info->hdr_info.lumi_min = pRXCap->hdr_lum_min;
-		pr_info("hdmitx: update RX hdr info %x\n",
-			info->hdr_info.hdr_support);
+		if (!((strncmp(info->name, "480cvbs", 7) == 0) ||
+		(strncmp(info->name, "576cvbs", 7) == 0) ||
+		(strncmp(info->name, "null", 4) == 0))) {
+			info->hdr_info.hdr_support =
+				(pRXCap->hdr_sup_eotf_sdr << 0) |
+				(pRXCap->hdr_sup_eotf_hdr << 1) |
+				(pRXCap->hdr_sup_eotf_smpte_st_2084 << 2);
+			info->hdr_info.lumi_max = pRXCap->hdr_lum_max;
+			info->hdr_info.lumi_avg = pRXCap->hdr_lum_avg;
+			info->hdr_info.lumi_min = pRXCap->hdr_lum_min;
+			pr_info("hdmitx: update rx hdr info %x at edid parsing\n",
+				info->hdr_info.hdr_support);
+		}
 	}
 	return 0;
 
@@ -2133,6 +2189,11 @@ bool hdmitx_edid_check_valid_mode(struct hdmitx_dev *hdev,
 	unsigned int calc_tmds_clk = 0;
 	int i = 0;
 	int svd_flag = 0;
+	/* Default max color depth is 24 bit */
+	enum hdmi_color_depth rx_y444_max_dc = COLORDEPTH_24B;
+	enum hdmi_color_depth rx_y422_max_dc = COLORDEPTH_24B;
+	enum hdmi_color_depth rx_y420_max_dc = COLORDEPTH_24B;
+	enum hdmi_color_depth rx_rgb_max_dc = COLORDEPTH_24B;
 
 	if (!hdev || !para)
 		return 0;
@@ -2211,7 +2272,51 @@ bool hdmitx_edid_check_valid_mode(struct hdmitx_dev *hdev,
 	if (calc_tmds_clk < rx_max_tmds_clk)
 		valid = 1;
 	else
-		valid = 0;
+		return 0;
+
+	if (para->cs == COLORSPACE_YUV444) {
+		/* Rx may not support Y444 */
+		if (!(pRXCap->native_Mode & (1 << 5)))
+			return 0;
+		if (pRXCap->dc_y444 && pRXCap->dc_30bit)
+			rx_y444_max_dc = COLORDEPTH_30B;
+		if (para->cd <= rx_y444_max_dc)
+			valid = 1;
+		else
+			valid = 0;
+		return valid;
+	}
+	if (para->cs == COLORSPACE_YUV422) {
+		/* Rx may not support Y422 */
+		if (!(pRXCap->native_Mode & (1 << 4)))
+			return 0;
+		if (pRXCap->dc_y444 && pRXCap->dc_30bit)
+			rx_y422_max_dc = COLORDEPTH_30B;
+		if (para->cd <= rx_y422_max_dc)
+			valid = 1;
+		else
+			valid = 0;
+		return valid;
+	}
+	if (para->cs == COLORSPACE_RGB444) {
+		/* Always assume RX supports RGB444 */
+		if (pRXCap->dc_30bit)
+			rx_rgb_max_dc = COLORDEPTH_30B;
+		if (para->cd <= rx_rgb_max_dc)
+			valid = 1;
+		else
+			valid = 0;
+		return valid;
+	}
+	if (para->cs == COLORSPACE_YUV420) {
+		if (pRXCap->dc_30bit_420)
+			rx_y420_max_dc = COLORDEPTH_30B;
+		if (para->cd <= rx_y420_max_dc)
+			valid = 1;
+		else
+			valid = 0;
+		return valid;
+	}
 
 	return valid;
 }
@@ -2308,6 +2413,7 @@ void hdmitx_edid_clear(struct hdmitx_dev *hdmitx_device)
 	memset(&hdmitx_device->EDID_hash[0], 0,
 		sizeof(hdmitx_device->EDID_hash));
 	hdmitx_device->edid_parsing = 0;
+	hdmitx_edid_set_default_aud(hdmitx_device);
 }
 
 /*
@@ -2326,7 +2432,6 @@ static void hdmitx_edid_blk_print(unsigned char *blk, unsigned int blk_idx)
 	}
 
 	memset(tmp_buf, 0, sizeof(TMP_EDID_BUF_SIZE));
-	hdmi_print(INF, EDID "blk%d raw data\n", blk_idx);
 	for (i = 0, pos = 0; i < 128; i++) {
 		pos += sprintf(tmp_buf + pos, "%02x", blk[i]);
 		if (((i+1) & 0x1f) == 0)    /* print 32bytes a line */
@@ -2350,9 +2455,7 @@ static unsigned int hdmitx_edid_check_valid_blocks(unsigned char *buf)
 			tmp_chksum += buf[i + j*128];
 		if (tmp_chksum != 0) {
 			valid_blk_no++;
-			if ((tmp_chksum & 0xff) == 0)
-				hdmi_print(INF, EDID "check sum valid\n");
-			else
+			if (!((tmp_chksum & 0xff) == 0))
 				hdmi_print(INF, EDID "check sum invalid\n");
 		}
 		tmp_chksum = 0;
@@ -2409,7 +2512,17 @@ int hdmitx_edid_dump(struct hdmitx_dev *hdmitx_device, char *buffer,
 	struct rx_cap *pRXCap = &(hdmitx_device->RXCap);
 
 	pos += snprintf(buffer+pos, buffer_len-pos,
-		"Rx Brand Name: %s\n", pRXCap->ReceiverBrandName);
+		"Rx Manufacturer Name: %s\n", pRXCap->IDManufacturerName);
+	pos += snprintf(buffer+pos, buffer_len-pos,
+		"Rx Product Code: %02x%02x\n",
+		pRXCap->IDProductCode[0],
+		pRXCap->IDProductCode[1]);
+	pos += snprintf(buffer+pos, buffer_len-pos,
+		"Rx Serial Number: %02x%02x%02x%02x\n",
+		pRXCap->IDSerialNumber[0],
+		pRXCap->IDSerialNumber[1],
+		pRXCap->IDSerialNumber[2],
+		pRXCap->IDSerialNumber[3]);
 	pos += snprintf(buffer+pos, buffer_len-pos,
 		"Rx Product Name: %s\n", pRXCap->ReceiverProductName);
 
@@ -2462,8 +2575,9 @@ int hdmitx_edid_dump(struct hdmitx_dev *hdmitx_device, char *buffer,
 	}
 	pos += snprintf(buffer+pos, buffer_len-pos,
 		"Speaker Allocation: %x\n", pRXCap->RxSpeakerAllocation);
-	pos += snprintf(buffer+pos, buffer_len-pos, "Vendor: 0x%x\n",
-		pRXCap->IEEEOUI);
+	pos += snprintf(buffer+pos, buffer_len-pos,
+		"Vendor: 0x%x ( %s device)\n",
+		pRXCap->IEEEOUI, (pRXCap->IEEEOUI)?"HDMI":"DVI");
 
 	pos += snprintf(buffer+pos, buffer_len-pos,
 		"MaxTMDSClock1 %d MHz\n", pRXCap->Max_TMDS_Clock1 * 5);
@@ -2501,7 +2615,6 @@ int hdmitx_edid_dump(struct hdmitx_dev *hdmitx_device, char *buffer,
 			edid_checkvalue[1],
 			edid_checkvalue[2],
 			edid_checkvalue[3]);
-
 	return pos;
 }
 

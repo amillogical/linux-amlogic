@@ -66,6 +66,7 @@
 static unsigned long keep_y_addr, keep_u_addr, keep_v_addr;
 static int keep_video_on;
 static int keep_id;
+static int keep_head_id;
 
 #define Y_BUFFER_SIZE   0x400000	/* for 1920*1088 */
 #define U_BUFFER_SIZE   0x100000	/* compatible with NV21 */
@@ -597,8 +598,9 @@ static int canvas_dup(ulong dst, ulong src_paddr, ulong size)
 #ifdef RESERVE_CLR_FRAME
 static int free_alloced_keep_buffer(void)
 {
-	pr_info("free_alloced_keep_buffer %p.%p.%p\n",
+	/*pr_info("free_alloced_keep_buffer %p.%p.%p\n",
 		(void *)keep_y_addr, (void *)keep_u_addr, (void *)keep_v_addr);
+		*/
 	if (keep_y_addr) {
 		codec_mm_free_for_dma(MEM_NAME, keep_y_addr);
 		keep_y_addr = 0;
@@ -661,10 +663,11 @@ static int alloc_keep_buffer(void)
 			goto err1;
 		}
 	}
-	pr_info("alloced keep buffer yaddr=%p,u_addr=%p,v_addr=%p\n",
+	pr_info("alloced keep buffer yaddr=%p,u_addr=%p,v_addr=%p,tvp=%d\n",
 		(void *)keep_y_addr,
 		(void *)keep_u_addr,
-		(void *)keep_v_addr);
+		(void *)keep_v_addr,
+		codec_mm_video_tvp_enabled());
 	return 0;
 
  err1:
@@ -683,7 +686,8 @@ void try_free_keep_video(int flags)
 {
 	int free_scatter_keeper = flags & 0x1;
 	if (keep_video_on || free_scatter_keeper) {
-		pr_info("disbled keep video before free keep buffer.\n");
+		/*pr_info("disbled keep video before free keep buffer.\n");
+		*/
 		keep_video_on = 0;
 		update_cur_dispbuf(NULL);
 		if (!get_video_enabled()) {
@@ -695,9 +699,14 @@ void try_free_keep_video(int flags)
 		}
 	}
 	if (free_scatter_keeper && keep_id > 0) {
-		pr_info("try_free_keep_video keepid\n");
+		/*pr_info("try_free_keep_video keepid\n");*/
 		codec_mm_keeper_unmask_keeper(keep_id, 0);
 		keep_id = -1;
+	}
+	if (free_scatter_keeper && keep_head_id > 0) {
+		/*pr_info("try_free_keep_video keep_head_id\n");*/
+		codec_mm_keeper_unmask_keeper(keep_head_id, 0);
+		keep_head_id = -1;
 	}
 	free_alloced_keep_buffer();
 	return;
@@ -738,6 +747,12 @@ void video_keeper_new_frame_notify(void)
 		pr_info("new frame show, free keeper\n");
 		codec_mm_keeper_unmask_keeper(keep_id, 120);
 		keep_id = -1;
+	}
+	if (keep_head_id > 0) {
+		/*wait 80 ms for vsync post.*/
+		pr_info("new frame show, free keeper head\n");
+		codec_mm_keeper_unmask_keeper(keep_head_id, 120);
+		keep_head_id = -1;
 	}
 	return;
 }
@@ -781,6 +796,7 @@ unsigned int vf_keep_current(struct vframe_s *cur_dispbuf)
 	if (1) {
 		int ret;
 		int old_keep = keep_id;
+		int old_head_keep = keep_head_id;
 		int type = MEM_TYPE_CODEC_MM;
 		if (cur_dispbuf->type & VIDTYPE_SCATTER)
 			type = MEM_TYPE_CODEC_MM_SCATTER;
@@ -793,7 +809,27 @@ unsigned int vf_keep_current(struct vframe_s *cur_dispbuf)
 				codec_mm_keeper_unmask_keeper(old_keep, 120);
 			}
 		}
+		ret = codec_mm_keeper_mask_keep_mem(
+			cur_dispbuf->mem_head_handle,
+			MEM_TYPE_CODEC_MM);
+		if (ret > 0) {
+			keep_head_id = ret;
+			if (old_head_keep > 0 &&
+					 keep_head_id != old_head_keep) {
+				/*wait 80 ms for vsync post.*/
+				codec_mm_keeper_unmask_keeper(old_head_keep,
+					 120);
+			}
+		}
 	}
+
+#ifdef CONFIG_MULTI_DEC
+	if (codec_mm_video_tvp_enabled()) {
+		pr_info("keep exit is TVP\n");
+		return 0;
+	}
+#endif
+
 	if ((get_cpu_type() >= MESON_CPU_MAJOR_ID_GXBB) &&
 		(cur_dispbuf->type & VIDTYPE_COMPRESS)) {
 		/* todo: duplicate compressed video frame */

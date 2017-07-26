@@ -803,13 +803,13 @@ static int dec_status(struct vdec_s *vdec, struct vdec_info *vstatus)
 {
 	struct vdec_mpeg4_hw_s *hw = (struct vdec_mpeg4_hw_s *)vdec->private;
 
-	vstatus->width = hw->vmpeg4_amstream_dec_info.width;
-	vstatus->height = hw->vmpeg4_amstream_dec_info.height;
+	vstatus->frame_width = hw->vmpeg4_amstream_dec_info.width;
+	vstatus->frame_height = hw->vmpeg4_amstream_dec_info.height;
 	if (0 != hw->vmpeg4_amstream_dec_info.rate)
-		vstatus->fps = DURATION_UNIT /
+		vstatus->frame_rate = DURATION_UNIT /
 				hw->vmpeg4_amstream_dec_info.rate;
 	else
-		vstatus->fps = DURATION_UNIT;
+		vstatus->frame_rate = DURATION_UNIT;
 	vstatus->error_count = READ_VREG(MP4_ERR_COUNT);
 	vstatus->status = hw->stat;
 
@@ -1188,7 +1188,6 @@ static int amvdec_mpeg4_probe(struct platform_device *pdev)
 	pdata->reset = reset;
 	pdata->irq_handler = vmpeg4_isr;
 
-	pdata->id = pdev->id;
 
 	if (pdata->use_vfm_path)
 		snprintf(pdata->vf_provider_name, VDEC_PROVIDER_NAME_SIZE,

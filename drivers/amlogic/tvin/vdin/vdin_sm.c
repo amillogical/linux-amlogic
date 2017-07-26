@@ -148,6 +148,10 @@ static int nosig2_unstable_cnt = EXIT_NOSIG_MAX_CNT;
 module_param(nosig2_unstable_cnt, int, 0664);
 MODULE_PARM_DESC(nosig2_unstable_cnt, "nosig2_unstable_cnt");
 
+static int signal_status = TVIN_SM_STATUS_NULL;
+module_param(signal_status, int, 0664);
+MODULE_PARM_DESC(signal_status, "signal_status");
+
 /*
    void tvin_smr_init_counter(void)
    {
@@ -201,9 +205,10 @@ static void hdmirx_color_fmt_handler(struct vdin_dev_s *devp)
 			(vdin_hdr_flag != pre_vdin_hdr_flag) ||
 			(vdin_fmt_range != pre_vdin_fmt_range)
 			) {
-			pr_info("[smr.%d] color fmt(%d->%d),csc_cfg:0x%x\n",
+			pr_info("[smr.%d] color fmt(%d->%d), hdr_flag(%d->%d)csc_cfg:0x%x\n",
 					devp->index,
 					pre_color_fmt, cur_color_fmt,
+					pre_vdin_hdr_flag, vdin_hdr_flag,
 					devp->csc_cfg);
 			vdin_get_format_convert(devp);
 			devp->csc_cfg = 1;
@@ -260,6 +265,19 @@ void tvin_smr_init_counter(int index)
 	sm_dev[index].exit_prestable_cnt = 0;
 }
 
+static void hdmirx_dv_check(struct vdin_dev_s *devp,
+	struct tvin_sig_property_s *prop)
+{
+	/*check hdmiin dolby input*/
+	if (prop->dolby_vision)
+		devp->dv_flag_cnt = 0;
+	else if (devp->dv_flag_cnt <= 60)
+		devp->dv_flag_cnt++;
+	if ((prop->dolby_vision != devp->dv_flag) &&
+		(prop->dolby_vision || (devp->dv_flag_cnt >= 60)))
+		devp->dv_flag = prop->dolby_vision;
+}
+
 /*
  * tvin state machine routine
  *
@@ -274,13 +292,14 @@ void tvin_smr(struct vdin_dev_s *devp)
 	struct tvin_frontend_s *fe;
 	struct tvin_sig_property_s *prop, *pre_prop;
 
-	if ((devp->flags & VDIN_FLAG_SM_DISABLE) ||
-		(devp->flags & VDIN_FLAG_SUSPEND))
-		return;
 	if (!devp || !devp->frontend) {
 		sm_dev[devp->index].state = TVIN_SM_STATUS_NULL;
 		return;
 	}
+
+	if ((devp->flags & VDIN_FLAG_SM_DISABLE) ||
+		(devp->flags & VDIN_FLAG_SUSPEND))
+		return;
 
 	sm_p = &sm_dev[devp->index];
 	fe = devp->frontend;
@@ -290,6 +309,8 @@ void tvin_smr(struct vdin_dev_s *devp)
 	port = devp->parm.port;
 	prop = &devp->prop;
 	pre_prop = &devp->pre_prop;
+
+	hdmirx_dv_check(devp, prop);
 
 	switch (sm_p->state) {
 	case TVIN_SM_STATUS_NOSIG:
@@ -632,6 +653,7 @@ void tvin_smr(struct vdin_dev_s *devp)
 		sm_p->state = TVIN_SM_STATUS_NOSIG;
 		break;
 	}
+	signal_status = sm_p->state;
 }
 
 /*

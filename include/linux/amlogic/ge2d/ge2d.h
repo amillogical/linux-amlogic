@@ -363,6 +363,8 @@ struct ge2d_gen_s {
 	unsigned char     vfmt_onoff_en;
 	unsigned int      dp_on_cnt;
 	unsigned int      dp_off_cnt;
+	unsigned int      fifo_size;
+	unsigned int      burst_ctrl;
 };
 
 struct ge2d_src1_data_s {
@@ -574,6 +576,7 @@ struct ge2d_cmd_s {
 	unsigned int     src2_buffer;
 	unsigned char    release_flag;
 	unsigned char    wait_done_flag;
+	unsigned char    hang_flag;
 };
 
 struct ge2d_config_s {
@@ -643,7 +646,6 @@ struct ge2d_manager_s {
 	struct ge2d_event_s event;
 	int irq_num;
 	int ge2d_state;
-	spinlock_t state_lock;  //for sync access to ge2d_state
 	int process_queue_state;
 	struct platform_device *pdev;
 };

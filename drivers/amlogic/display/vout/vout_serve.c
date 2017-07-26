@@ -384,6 +384,8 @@ static ssize_t vout_attr_vinfo_show(struct class *class,
 		"    sync_duration_den:     %d\n"
 		"    screen_real_width:     %d\n"
 		"    screen_real_height:    %d\n"
+		"    htotal:                %d\n"
+		"    vtotal:                %d\n"
 		"    video_clk:             %d\n"
 		"    viu_color_fmt:         %d\n\n",
 		info->name, info->mode,
@@ -391,8 +393,9 @@ static ssize_t vout_attr_vinfo_show(struct class *class,
 		info->aspect_ratio_num, info->aspect_ratio_den,
 		info->sync_duration_num, info->sync_duration_den,
 		info->screen_real_width, info->screen_real_height,
+		info->htotal, info->vtotal,
 		info->video_clk, info->viu_color_fmt);
-	len += sprintf(buf+len, "hdr_info:\n"
+	len += sprintf(buf+len, "master_display_info:\n"
 		"    present_flag          %d\n"
 		"    features              0x%x\n"
 		"    primaries             0x%x, 0x%x\n"
@@ -412,6 +415,17 @@ static ssize_t vout_attr_vinfo_show(struct class *class,
 		info->master_display_info.white_point[1],
 		info->master_display_info.luminance[0],
 		info->master_display_info.luminance[1]);
+	len += sprintf(buf+len, "hdr_info:\n"
+		"    hdr_support           %d\n"
+		"    lumi_max              %d\n"
+		"    lumi_avg              %d\n"
+		"    lumi_min              %d\n"
+		"    sink_flag             %d\n",
+		info->hdr_info.hdr_support,
+		info->hdr_info.lumi_max,
+		info->hdr_info.lumi_avg,
+		info->hdr_info.lumi_min,
+		info->hdr_info.sink_flag);
 	return len;
 }
 
@@ -497,8 +511,25 @@ static long vout_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			ret = -EFAULT;
 		else if (info->mode == VMODE_INIT_NULL)
 			ret = -EFAULT;
-		else if (copy_to_user(argp, info, sizeof(struct vinfo_s)))
-			ret = -EFAULT;
+		else {
+			struct vinfo_base_s  baseinfo;
+			baseinfo.mode = info->mode;
+			baseinfo.width = info->width;
+			baseinfo.height = info->height;
+			baseinfo.field_height = info->field_height;
+			baseinfo.aspect_ratio_num = info->aspect_ratio_num;
+			baseinfo.aspect_ratio_den = info->aspect_ratio_den;
+			baseinfo.sync_duration_num = info->sync_duration_num;
+			baseinfo.sync_duration_den = info->sync_duration_den;
+			baseinfo.screen_real_width = info->screen_real_width;
+			baseinfo.screen_real_height = info->screen_real_height;
+			baseinfo.video_clk = info->video_clk;
+			baseinfo.viu_color_fmt = info->viu_color_fmt;
+			baseinfo.hdr_info = info->hdr_info;
+			if (copy_to_user(argp, &baseinfo,
+						sizeof(struct vinfo_base_s)))
+				ret = -EFAULT;
+		}
 		break;
 	default:
 		ret = -EINVAL;

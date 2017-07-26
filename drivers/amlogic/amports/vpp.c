@@ -305,8 +305,8 @@ static uint coeff(uint *settings, uint ratio, uint phase,
 	}
 	coeff_type = settings[coeff_select];
 	/* TODO: add future TV chips */
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB) ||
-		(get_cpu_type() == MESON_CPU_MAJOR_ID_TXL)) {
+	if (is_meson_gxtvbb_cpu() || is_meson_txl_cpu() ||
+		is_meson_txlx_cpu()) {
 		if (coeff_type == COEF_BICUBIC_SHARP)
 			coeff_type = COEF_BICUBIC;
 	} else {
@@ -403,7 +403,7 @@ static unsigned int super_debug;
 module_param(super_debug, uint, 0664);
 MODULE_PARM_DESC(super_debug, "super_debug");
 
-static unsigned int super_scaler = 1;
+unsigned int super_scaler = 1;
 module_param(super_scaler, uint, 0664);
 MODULE_PARM_DESC(super_scaler, "super_scaler");
 
@@ -431,6 +431,7 @@ static unsigned int horz_scaler_filter = 0xff;
 module_param(horz_scaler_filter, uint, 0664);
 MODULE_PARM_DESC(horz_scaler_filter, "horz_scaler_filter");
 
+/*need check this value,*/
 static unsigned int bypass_ratio = 205;
 module_param(bypass_ratio, uint, 0664);
 MODULE_PARM_DESC(bypass_ratio, "bypass_ratio");
@@ -577,6 +578,30 @@ calculate_non_linear_ratio(unsigned middle_ratio,
  * (1.25 * 3840 / 1920) for 1080p mode.
  */
 #define MIN_RATIO_1000	1250
+unsigned int cur_skip_ratio;
+MODULE_PARM_DESC(cur_skip_ratio, "cur_skip_ratio");
+module_param(cur_skip_ratio, uint, 0444);
+unsigned int cur_vf_type;
+MODULE_PARM_DESC(cur_vf_type, "cur_vf_type");
+module_param(cur_vf_type, uint, 0444);
+
+/*
+test on txlx:
+Time_out = (V_out/V_screen_total)/FPS_out;
+if di bypas:
+Time_in = (H_in * V_in)/Clk_vpu;
+if di work; for di clk is less than vpu usually;
+Time_in = (H_in * V_in)/Clk_di;
+if Time_in < Time_out,need do vskip;
+but in effect,test result may have some error.
+ratio1:V_out test result may larger than calc result;
+--after test is large ratio is 1.09;
+--so wo should choose the largest ratio_v_out = 110/100;
+ratio2:use clk_di or clk_vpu;
+--txlx di clk is 250M or 500M;
+--befor txlx di clk is 333M;
+So need adjust bypass_ratio;
+*/
 
 static int
 vpp_process_speed_check(s32 width_in,
@@ -586,11 +611,25 @@ vpp_process_speed_check(s32 width_in,
 		struct vpp_frame_par_s *next_frame_par,
 		const struct vinfo_s *vinfo, struct vframe_s *vf)
 {
-	u32 cur_ratio;
+	u32 cur_ratio, bpp = 1;
 	int min_ratio_1000 = 0;
+	u32 vtotal, clk_in_pps = 0;
+
+	if (vf)
+		cur_vf_type = vf->type;
+	if (force_vskip_cnt == 0xff)/*for debug*/
+		return SPEED_CHECK_DONE;
 	if (next_frame_par->vscale_skip_count < force_vskip_cnt)
 		return SPEED_CHECK_VSKIP;
 
+	if (vf->type & VIDTYPE_PRE_INTERLACE) {
+		if (is_meson_txlx_cpu())
+			clk_in_pps = 250000000;
+		else
+			clk_in_pps = 333000000;
+	} else {
+		clk_in_pps = get_vpu_clk();
+	}
 	if (vf->type & VIDTYPE_COMPRESS) {
 		if (vf->width > 720)
 			min_ratio_1000 = (MIN_RATIO_1000 * 1400)/1000;
@@ -602,20 +641,40 @@ vpp_process_speed_check(s32 width_in,
 		else
 			min_ratio_1000 = 1750;
 	}
-
+	if (vinfo->field_height < vinfo->height)
+		vtotal = vinfo->vtotal/2;
+	else
+		vtotal = vinfo->vtotal;
 	/* #if (MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8) */
 	if ((get_cpu_type() >= MESON_CPU_MAJOR_ID_M8) && !is_meson_mtvd_cpu()) {
 		if ((width_in <= 0) || (height_in <= 0) || (height_out <= 0)
 			|| (height_screen <= 0))
 			return SPEED_CHECK_DONE;
 
-		if (height_in > height_out) {
+		if ((next_frame_par->vscale_skip_count > 0)
+			&& (vf->type & VIDTYPE_VIU_444))
+			bpp = 2;
+		if (height_in * bpp > height_out) {
+			/*don't need do skip for under 5% scaler down
+			*reason:for 1080p input,4k output, if di clk is 250M,
+			*the clac height is 1119;which is bigger than 1080!
+			*/
+			if (height_in > height_out &&
+				((height_in - height_out) < height_in/20))
+				return SPEED_CHECK_DONE;
 			if (get_cpu_type() >=
 				MESON_CPU_MAJOR_ID_GXBB) {
 				cur_ratio = div_u64((u64)height_in *
 						(u64)vinfo->height *
 						1000,
 						height_out * 2160);
+				/* di process first, need more a bit of ratio */
+				if (vf->type & VIDTYPE_PRE_INTERLACE)
+					cur_ratio = (cur_ratio * 105) / 100;
+				if ((next_frame_par->vscale_skip_count > 0)
+					&& (vf->type & VIDTYPE_VIU_444))
+					cur_ratio = cur_ratio * 2;
+				cur_skip_ratio = cur_ratio;
 				if ((cur_ratio > min_ratio_1000) &&
 				(vf->source_type != VFRAME_SOURCE_TYPE_TUNER) &&
 				(vf->source_type != VFRAME_SOURCE_TYPE_CVBS))
@@ -628,10 +687,10 @@ vpp_process_speed_check(s32 width_in,
 						(u64)width_in *
 						(u64)height_in *
 						(u64)vinfo->sync_duration_num *
-						(u64)height_screen,
+						(u64)vtotal,
 						height_out *
 						vinfo->sync_duration_den *
-						bypass_ratio) > get_vpu_clk())
+						bypass_ratio) > clk_in_pps)
 					return SPEED_CHECK_VSKIP;
 				else
 					return SPEED_CHECK_DONE;
@@ -642,10 +701,10 @@ vpp_process_speed_check(s32 width_in,
 					(u64)width_in *
 					(u64)height_in *
 					(u64)vinfo->sync_duration_num *
-					(u64)height_screen,
+					(u64)vtotal,
 					height_out *
 					vinfo->sync_duration_den * 256)
-					> get_vpu_clk())
+					> clk_in_pps)
 					return SPEED_CHECK_VSKIP;
 				/* 4K down scaling to non 4K > 30hz,
 				   skip lines for memory bandwidth */
@@ -767,6 +826,10 @@ vpp_set_filters2(u32 process_3d_type, u32 width_in,
 		}
 	}
 
+	if (is_meson_txlx_cpu()) {
+		next_frame_par->vpp_postblend_out_width = vinfo->width;
+		next_frame_par->vpp_postblend_out_height = vinfo->height;
+	}
 #ifndef TV_3D_FUNCTION_OPEN
 	next_frame_par->vscale_skip_count = 0;
 	next_frame_par->hscale_skip_count = 0;
@@ -949,9 +1012,9 @@ RESTART:
 
 		ratio_y = (height_after_ratio << 18) / screen_height;
 		if (super_debug)
-			pr_info("height_after_ratio=%d,%d,%d,%d\n",
+			pr_info("height_after_ratio=%d,%d,%d,%d,%d\n",
 				   height_after_ratio, ratio_x, ratio_y,
-				   aspect_factor);
+				   aspect_factor, wide_mode);
 
 		if (wide_mode == VIDEO_WIDEOPTION_NORMAL) {
 			ratio_x = ratio_y = max(ratio_x, ratio_y);
@@ -1138,7 +1201,8 @@ RESTART:
 		(vpp_zoom_center_x << 10)) /
 		ratio_x;
 	end = (w_in << 18) / ratio_x + start - 1;
-	pr_info("left:start =%d,%d,%d,%d  %d,%d,%d\n",
+	if (super_debug)
+		pr_info("left:start =%d,%d,%d,%d  %d,%d,%d\n",
 			start, end, video_left,
 			video_width, w_in, ratio_x, vpp_zoom_center_x);
 #endif
@@ -1243,8 +1307,8 @@ RESTART:
 			(next_frame_par->VPP_vd_end_lines_ -
 			next_frame_par->VPP_vd_start_lines_ + 1) /
 			(next_frame_par->vscale_skip_count + 1),
-			next_frame_par->VPP_vsc_endp -
-			next_frame_par->VPP_vsc_startp,
+			(next_frame_par->VPP_vsc_endp -
+			next_frame_par->VPP_vsc_startp + 1),
 			vinfo->height >>
 			((vpp_flags & VPP_FLAG_INTERLACE_OUT) ? 1 : 0),
 			next_frame_par,
@@ -1516,7 +1580,9 @@ int vpp_set_super_scaler_regs(int scaler_path_sel,
 		int reg_srscl1_hsize,
 		int reg_srscl1_vsize,
 		int reg_srscl1_hori_ratio,
-		int reg_srscl1_vert_ratio)
+		int reg_srscl1_vert_ratio,
+		int vpp_postblend_out_width,
+		int vpp_postblend_out_height)
 {
 
 	int tmp_data = 0;
@@ -1609,19 +1675,26 @@ int vpp_set_super_scaler_regs(int scaler_path_sel,
 	if (tmp_data != tmp_data2)
 		VSYNC_WR_MPEG_REG(VPP_VE_H_V_SIZE, tmp_data);
 	/*chroma blue stretch size setting*/
-	if (scaler_path_sel == sup0_pp_sp1_scpath) {
-		tmp_data = (((reg_srscl1_hsize & 0x1fff) <<
-			reg_srscl1_hori_ratio) << 16) |
-			((reg_srscl1_vsize & 0x1fff) << reg_srscl1_vert_ratio);
-		tmp_data2 = READ_VCBUS_REG(VPP_PSR_H_V_SIZE);
-		if (tmp_data != tmp_data2)
-			VSYNC_WR_MPEG_REG(VPP_PSR_H_V_SIZE, tmp_data);
-	} else if (scaler_path_sel == sup0_pp_post_blender) {
-		tmp_data = ((reg_srscl1_hsize & 0x1fff) << 16) |
-				   (reg_srscl1_vsize & 0x1fff);
-		tmp_data2 = READ_VCBUS_REG(VPP_PSR_H_V_SIZE);
-		if (tmp_data != tmp_data2)
-			VSYNC_WR_MPEG_REG(VPP_PSR_H_V_SIZE, tmp_data);
+	if (is_meson_txlx_cpu()) {
+		tmp_data = (((vpp_postblend_out_width & 0x1fff) << 16) |
+			(vpp_postblend_out_height & 0x1fff));
+		VSYNC_WR_MPEG_REG(VPP_OUT_H_V_SIZE, tmp_data);
+	} else {
+		if (scaler_path_sel == sup0_pp_sp1_scpath) {
+			tmp_data = (((reg_srscl1_hsize & 0x1fff) <<
+				reg_srscl1_hori_ratio) << 16) |
+				((reg_srscl1_vsize & 0x1fff) <<
+				reg_srscl1_vert_ratio);
+			tmp_data2 = READ_VCBUS_REG(VPP_PSR_H_V_SIZE);
+			if (tmp_data != tmp_data2)
+				VSYNC_WR_MPEG_REG(VPP_PSR_H_V_SIZE, tmp_data);
+		} else if (scaler_path_sel == sup0_pp_post_blender) {
+			tmp_data = ((reg_srscl1_hsize & 0x1fff) << 16) |
+					   (reg_srscl1_vsize & 0x1fff);
+			tmp_data2 = READ_VCBUS_REG(VPP_PSR_H_V_SIZE);
+			if (tmp_data != tmp_data2)
+				VSYNC_WR_MPEG_REG(VPP_PSR_H_V_SIZE, tmp_data);
+		}
 	}
 
 	/* path config */
@@ -2422,8 +2495,8 @@ void vpp_set_3d_scale(bool enable)
 
 void vpp_super_scaler_support(void)
 {
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB) ||
-		(get_cpu_type() == MESON_CPU_MAJOR_ID_TXL))
+	if (is_meson_gxtvbb_cpu() || is_meson_txl_cpu() ||
+		is_meson_txlx_cpu())
 		super_scaler = 1;
 	else
 		super_scaler = 0;
@@ -2431,10 +2504,11 @@ void vpp_super_scaler_support(void)
 
 void vpp_bypass_ratio_config(void)
 {
-	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXBB)
-		|| (get_cpu_type() == MESON_CPU_MAJOR_ID_GXL)
-		|| (get_cpu_type() == MESON_CPU_MAJOR_ID_GXM))
+	if (is_meson_gxbb_cpu() || is_meson_gxl_cpu() ||
+		is_meson_gxm_cpu())
 		bypass_ratio = 125;
+	else if (is_meson_txlx_cpu() || is_meson_txl_cpu())
+		bypass_ratio = 247;/*0x110 * (100/110)=0xf7*/
 	else
 		bypass_ratio = 205;
 }

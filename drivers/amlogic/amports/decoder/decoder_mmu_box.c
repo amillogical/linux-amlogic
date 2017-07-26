@@ -77,11 +77,14 @@ static int decoder_mmu_box_mgr_del_box(struct decoder_mmu_box *box)
 void *decoder_mmu_box_alloc_box(const char *name,
 	int channel_id,
 	int max_num,
-	int min_size_M)
+	int min_size_M,
+	int mem_flags)
 /*min_size_M:wait alloc this size*/
 {
 	struct decoder_mmu_box *box;
 	int size;
+
+	pr_info("decoder_mmu_box_alloc_box, mem_flags = 0x%x\n", mem_flags);
 
 	size = sizeof(struct decoder_mmu_box) +
 			sizeof(struct codec_mm_scatter *) *
@@ -95,9 +98,8 @@ void *decoder_mmu_box_alloc_box(const char *name,
 	box->max_sc_num = max_num;
 	box->name = name;
 	box->channel_id = channel_id;
-	box->tvp_mode = codec_mm_video_tvp_enabled() ?
-		CODEC_MM_FLAGS_TVP : 0;
-	/*TODO.changed to tvp flags from decoder init*/
+	box->tvp_mode = mem_flags;
+
 	mutex_init(&box->mutex);
 	INIT_LIST_HEAD(&box->list);
 	decoder_mmu_box_mgr_add_box(box);
@@ -236,12 +238,13 @@ static int decoder_mmu_box_dump(struct decoder_mmu_box *box,
 	int tsize = 0;
 	int s;
 	int i;
-	if (!pbuf)
+	if (!buf) {
 		pbuf = sbuf;
-
+		size = 100000;
+	}
 	#define BUFPRINT(args...) \
 	do {\
-		s = sprintf(pbuf, args);\
+		s = snprintf(pbuf, size - tsize, args);\
 		tsize += s;\
 		pbuf += s; \
 	} while (0)
@@ -270,12 +273,14 @@ static int decoder_mmu_box_dump_all(void *buf, int size)
 	int s;
 	int i;
 	struct list_head *head, *list;
-	if (!pbuf)
+	if (!pbuf) {
 		pbuf = sbuf;
+		size = 100000;
+	}
 
 	#define BUFPRINT(args...) \
 	do {\
-		s = sprintf(pbuf, args);\
+		s = snprintf(pbuf, size - tsize, args);\
 		tsize += s;\
 		pbuf += s; \
 	} while (0)
@@ -295,9 +300,11 @@ static int decoder_mmu_box_dump_all(void *buf, int size)
 			box->channel_id,
 			box->max_sc_num);
 		if (buf) {
-			tsize += decoder_mmu_box_dump(box, pbuf, size - tsize);
-			if (tsize > 0)
-				pbuf += tsize;
+			s += decoder_mmu_box_dump(box, pbuf, size - tsize);
+			if (s > 0) {
+				tsize += s;
+				pbuf += s;
+			}
 		} else {
 			pr_info("%s", sbuf);
 			pbuf = sbuf;

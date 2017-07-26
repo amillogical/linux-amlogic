@@ -3,7 +3,9 @@
 #include <linux/cdev.h>
 #include <linux/amlogic/amports/vframe.h>
 #include <linux/amlogic/amports/video.h>
+#include <linux/amlogic/amvecm/amvecm.h>
 #include <linux/atomic.h>
+#include <linux/clk.h>
 
 /* di hardware version m8m2*/
 #define NEW_DI_V1 0x00000002 /* from m6tvc */
@@ -126,6 +128,7 @@ enum pulldown_mode_e {
 	PULL_DOWN_BUF1	  = 3,/* do wave with dup[0] */
 	PULL_DOWN_EI	  = 4,/* ei only */
 	PULL_DOWN_NORMAL  = 5,/* normal di */
+	PULL_DOWN_NORMAL_2  = 6,/* di */
 };
 
 enum canvas_idx_e {
@@ -209,6 +212,7 @@ struct di_buf_s {
 	1: after get
 	0: after put*/
 	atomic_t di_cnt;
+	struct page	*pages;
 };
 extern uint di_mtn_1_ctrl1;
 #ifdef DET3D
@@ -226,7 +230,6 @@ extern void di_hw_init(void);
 
 extern void di_hw_uninit(void);
 
-extern void enable_di_pre_mif(int enable);
 
 extern int di_vscale_skip_count;
 
@@ -272,6 +275,7 @@ struct DI_MIF_s {
 	unsigned		canvas0_addr1:8;
 	unsigned		canvas0_addr2:8;
 };
+
 struct DI_SIM_MIF_s {
 	unsigned short	start_x;
 	unsigned short	end_x;
@@ -280,15 +284,24 @@ struct DI_SIM_MIF_s {
 	unsigned short	canvas_num;
 	unsigned short	bit_mode;
 };
+
 struct DI_MC_MIF_s {
 	unsigned short start_x;
 	unsigned short start_y;
+	unsigned short end_y;
 	unsigned short size_x;
 	unsigned short size_y;
 	unsigned short canvas_num;
 	unsigned short blend_en;
 	unsigned short vecrd_offset;
 };
+
+struct di_pq_parm_s {
+	struct am_pq_parm_s pq_parm;
+	struct am_reg_s *regs;
+	struct list_head list;
+};
+
 void disable_deinterlace(void);
 
 void disable_pre_deinterlace(void);
@@ -360,7 +373,8 @@ void enable_di_post_2(
 	struct DI_SIM_MIF_s	*di_mtnprd_mif,
 	int ei_en, int blend_en, int blend_mtn_en, int blend_mode,
 	int di_vpp_en, int di_ddr_en,
-	int post_field_num, int hold_line , int urgent
+	int post_field_num, int hold_line , int urgent,
+	int invert_mv
 	#ifndef NEW_DI_V1
 	, unsigned long *reg_mtn_info
 	#endif
@@ -378,7 +392,8 @@ void di_post_switch_buffer(
 	struct DI_MC_MIF_s		*di_mcvecrd_mif,
 	int ei_en, int blend_en, int blend_mtn_en, int blend_mode,
 	int di_vpp_en, int di_ddr_en,
-	int post_field_num, int hold_line, int urgent
+	int post_field_num, int hold_line, int urgent,
+	int invert_mv
 	#ifndef NEW_DI_V1
 	, unsigned long *reg_mtn_info
 	#endif
@@ -408,8 +423,6 @@ extern void recycle_keep_buffer(void);
 extern unsigned int di_log_flag;
 extern unsigned int di_debug_flag;
 extern bool mcpre_en;
-extern bool dnr_reg_update;
-extern bool dnr_dm_en;
 extern int mpeg2vdin_flag;
 extern int di_vscale_skip_count_real;
 extern unsigned int pulldown_enable;
@@ -466,12 +479,16 @@ void DI_VSYNC_WR_MPEG_REG_BITS(unsigned int addr, unsigned int val,
 
 #define DI_COUNT   1
 #define DI_MAP_FLAG	0x1
+#define DI_LOAD_REG_FLAG 0x2
 struct di_dev_s {
 	dev_t			   devt;
 	struct cdev		   cdev; /* The cdev structure */
 	struct device	   *dev;
 	struct platform_device	*pdev;
 	struct task_struct *task;
+	struct clk	*vpu_clkb;
+	struct list_head   pq_table_list;
+	struct mutex       pq_lock;
 	unsigned char	   di_event;
 	unsigned int	   di_irq;
 	unsigned int	   flags;
@@ -488,9 +505,8 @@ struct di_dev_s {
 	/* is DI surpport post wr to mem for OMX */
 	unsigned int       post_wr_surpport;
 	unsigned int	   flag_cma;
-	unsigned int	   cma_alloc[10];
-	unsigned int	   buffer_addr[10];
-	struct page	*pages[10];
+	struct page			*total_pages;
+	atomic_t			mem_flag;
 };
 #define di_dev_t struct di_dev_s
 
