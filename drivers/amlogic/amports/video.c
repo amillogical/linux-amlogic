@@ -3568,7 +3568,6 @@ static inline bool vpts_expire(struct vframe_s *cur_vf,
 	}
 	/* check video PTS discontinuity */
 	else if ((enable_video_discontinue_report) &&
-		 (first_frame_toggled) &&
 		 (abs(systime - pts) > tsync_vpts_discontinuity_margin()) &&
 		 ((next_vf->flag & VFRAME_FLAG_NO_DISCONTINUE) == 0)) {
 		/**
@@ -4240,10 +4239,7 @@ static irqreturn_t vsync_isr(int irq, void *dev_id)
 			timestamp_pcrscr_enable(1);
 			/*pr_info("system_time=%d, omx_pts=%d, diff=%d\n",
 			system_time, omx_pts, diff);*/
-			/*add  greatest common divisor of duration
-			1500(60fps) 3000(30fps) 3750(24fps) for some video
-			that pts is not evenly*/
-			timestamp_pcrscr_set(omx_pts + DURATION_GCD);
+			timestamp_pcrscr_set(omx_pts);
 		}
 	} else
 		omx_pts = 0;

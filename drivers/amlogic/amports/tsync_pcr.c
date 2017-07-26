@@ -851,8 +851,7 @@ static unsigned long tsync_pcr_check(void)
 	cur_vpts = timestamp_vpts_get();
 
 	/*set pcr after discontinue according to apts and vpts*/
-	if ((tsync_pcr_tsdemuxpcr_discontinue &
-		(AUDIO_DISCONTINUE | VIDEO_DISCONTINUE)) ==
+	if (tsync_pcr_tsdemuxpcr_discontinue &
 		(AUDIO_DISCONTINUE | VIDEO_DISCONTINUE)) {
 		if (cur_apts < cur_vpts && cur_vpts - cur_apts < 3 * 90000
 			&& last_checkin_minpts - cur_apts > 54000)
