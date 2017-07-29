@@ -304,6 +304,7 @@ static u32 udebug_pause_decode_idx;
 static u32 decode_pic_begin;
 static uint slice_parse_begin;
 static u32 step;
+static bool is_reset;
 
 static u32 buf_alloc_width;
 static u32 buf_alloc_height;
@@ -8231,6 +8232,12 @@ int vh265_dec_status(struct vdec_info *vstatus)
 	return 0;
 }
 
+int vh265_set_isreset(struct vdec_s *vdec, int isreset)
+{
+	is_reset = isreset;
+	return 0;
+}
+
 static int vh265_vdec_info_init(void)
 {
 	gvs = kzalloc(sizeof(struct vdec_info), GFP_KERNEL);
@@ -8489,10 +8496,11 @@ static s32 vh265_init(struct hevc_state_s *hevc)
 	vf_notify_receiver(hevc->provider_name, VFRAME_EVENT_PROVIDER_START,
 				NULL);
 	if (hevc->frame_dur != 0) {
-		vf_notify_receiver(hevc->provider_name,
-				VFRAME_EVENT_PROVIDER_FR_HINT,
-				(void *)
-				((unsigned long)hevc->frame_dur));
+		if (!is_reset)
+			vf_notify_receiver(hevc->provider_name,
+					VFRAME_EVENT_PROVIDER_FR_HINT,
+					(void *)
+					((unsigned long)hevc->frame_dur));
 		fr_hint_status = VDEC_HINTED;
 	} else
 		fr_hint_status = VDEC_NEED_HINT;
@@ -8620,7 +8628,7 @@ static int vh265_stop(struct hevc_state_s *hevc)
 	}
 
 	if (hevc->stat & STAT_VF_HOOK) {
-		if (fr_hint_status == VDEC_HINTED)
+		if (fr_hint_status == VDEC_HINTED && !is_reset)
 			vf_notify_receiver(hevc->provider_name,
 					VFRAME_EVENT_PROVIDER_FR_END_HINT,
 					NULL);
@@ -8732,7 +8740,6 @@ static int vmh265_stop(struct hevc_state_s *hevc)
 		del_timer_sync(&hevc->timer);
 		hevc->stat &= ~STAT_TIMER_ARM;
 	}
-
 	if (hevc->stat & STAT_VF_HOOK) {
 		if (fr_hint_status == VDEC_HINTED)
 			vf_notify_receiver(hevc->provider_name,
@@ -9429,6 +9436,8 @@ static int amvdec_h265_probe(struct platform_device *pdev)
 #ifdef MULTI_INSTANCE_SUPPORT
 	pdata->private = hevc;
 	pdata->dec_status = vh265_dec_status;
+	pdata->set_isreset = vh265_set_isreset;
+	is_reset = 0;
 	if (vh265_init(pdata) < 0) {
 #else
 	if (vh265_init(hevc) < 0) {
