@@ -58,6 +58,7 @@ config GE2D_KEEP_FRAME
 menu "Video Decoders"
 	depends on AM_VIDEO
 
+config MULTI_DEC
 	boolean "Support multi-instance decoding"
 	default n
 
