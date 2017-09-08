@@ -166,7 +166,6 @@ static u32 buf_size = 32 * 1024 * 1024;
 static u32 ccbuf_phyAddress;
 static void *ccbuf_phyAddress_virt;
 static int ccbuf_phyAddress_is_remaped_nocache;
-static u32 lastpts;
 static u32 fr_hint_status;
 
 
@@ -351,10 +350,6 @@ static irqreturn_t vmpeg12_isr(int irq, void *dev_id)
 					PICINFO_TYPE_P)))
 			pts_valid = 1;
 
-		if (pts_valid && lastpts == pts)
-			pts_valid = 0;
-		if (pts_valid)
-			lastpts = pts;
 		/*if (frame_prog == 0) */
 		{
 			frame_prog = info & PICINFO_PROG;
