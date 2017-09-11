@@ -79,17 +79,23 @@
 			//no-map;
 		};
 
-		carveout_reserved:linux,carveout-reserve {
-			compatible = "amlogic, idev-mem";
-			size = <0x0 0x2000000>;
+		chunk_reserved:linux,chunk-reserve {
+			compatible = "amlogic, chunk-reserve";
+			size = <0x0 0x4000000>;
 		};
+
+		ion_reserved:linux,ion-dev {
+			compatible = "amlogic,idev-mem";
+			size = <0x0 0x3000000>;
+		};
+/*
 		cma_reserved:linux,cma-reserve {
 			compatible = "shared-dma-pool";
 			reusable;
 			alignment = <0x0 0x400000>;
 			size = <0x0 0x4000000>;
 		};
-
+*/
 		/*  vdin0 CMA pool */
 		//vdin0_cma_reserved:linux,vdin0_cma {
 		//	compatible = "shared-dma-pool";
@@ -147,6 +153,12 @@
 		status = "okay";
 		led_gpio = <&gpio GPIODV_24 GPIO_ACTIVE_HIGH>;
 		led_active_low = <1>;
+	};
+
+	chunk-reserve {
+		compatible = "amlogic, chunk-reserve";
+		memory-region = <&chunk_reserved>;
+		status = "okay";
 	};
 
 	meson-vout {
@@ -254,7 +266,7 @@
 
 	ion_dev {
 		compatible = "amlogic, ion_dev";
-		memory-region = <&cma_reserved>;
+		memory-region = <&ion_reserved>;
 	};
 
 	vdec {
